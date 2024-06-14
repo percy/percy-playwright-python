@@ -3,10 +3,9 @@ import json
 import unittest
 import platform
 from threading import Thread
-import httpretty
 from http.server import BaseHTTPRequestHandler, HTTPServer
-import requests
 from unittest.mock import patch, MagicMock
+import httpretty
 
 from playwright.sync_api import sync_playwright
 from playwright._repo_version import version as PLAYWRIGHT_VERSION
@@ -252,7 +251,8 @@ class TestPercySnapshot(unittest.TestCase):
 
         self.assertEqual(
             "Invalid function call - "
-            "percy_snapshot(). Please use percy_screenshot() function while using Percy with Automate."
+            "percy_snapshot(). Please use percy_screenshot() "
+            "function while using Percy with Automate."
             " For more information on usage of PercyScreenshot, refer https://docs.percy.io/docs"
             "/integrate-functional-testing-with-visual-testing",
             str(context.exception),
