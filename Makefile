@@ -7,10 +7,10 @@ $(VENV):
 	python3 -m venv .venv
 	$(VENV)/python -m pip install --upgrade pip setuptools wheel
 	yarn
-	python3 -m playwright install
 
 $(VENV)/$(MARKER): $(VENVDEPS) | $(VENV)
 	$(VENV)/pip install $(foreach path,$(REQUIREMENTS),-r $(path))
+	$(VENV)/python -m playwright install
 	touch $(VENV)/$(MARKER)
 
 .PHONY: venv lint test clean build release
