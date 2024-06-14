@@ -97,7 +97,7 @@ class TestPercySnapshot(unittest.TestCase):
         cls.p = sync_playwright().start()
         # Launch the browser
         cls.browser = cls.p.chromium.launch(
-            headless=False
+            headless=True
         )  # Set headless=True if you don't want to see the browser
         context = cls.browser.new_context()
         cls.page = context.new_page()
