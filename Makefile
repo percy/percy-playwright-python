@@ -7,12 +7,13 @@ $(VENV):
 	python3 -m venv .venv
 	$(VENV)/python -m pip install --upgrade pip setuptools wheel
 	yarn
+	playwright install
 
 $(VENV)/$(MARKER): $(VENVDEPS) | $(VENV)
 	$(VENV)/pip install $(foreach path,$(REQUIREMENTS),-r $(path))
 	touch $(VENV)/$(MARKER)
 
-# .PHONY: venv lint test clean build release
+.PHONY: venv lint test clean build release
 
 venv: $(VENV)/$(MARKER)
 
@@ -20,7 +21,7 @@ lint: venv
 	$(VENV)/pylint percy/* tests/*
 
 test: venv
-	$(VENV)/python -m unittest tests.test_screenshot
+	npx percy exec --testing -- $(VENV)/python -m unittest tests.test_screenshot
 	$(VENV)/python -m unittest tests.test_cache
 	$(VENV)/python -m unittest tests.test_page_metadata
 

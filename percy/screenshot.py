@@ -70,7 +70,7 @@ def percy_snapshot(page, name, **kwargs):
     if session_type == "automate":
         raise Exception(
             "Invalid function call - "
-            "percy_snapshot()."
+            "percy_snapshot(). "
             "Please use percy_screenshot() function while using Percy with Automate. "
             "For more information on usage of PercyScreenshot, "
             "refer https://docs.percy.io/docs/integrate-functional-testing-with-visual-testing"
