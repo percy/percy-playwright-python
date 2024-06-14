@@ -30,5 +30,5 @@ clean:
 build: venv
 	$(VENV)/python setup.py sdist bdist_wheel
 
-# release: build
-# 	$(VENV)/twine upload dist/* --username __token__ --password ${PYPI_TOKEN}
+release: build
+	$(VENV)/twine upload dist/* --username __token__ --password ${PYPI_TOKEN}
