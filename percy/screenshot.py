@@ -38,7 +38,7 @@ def is_percy_enabled():
                 f"{LABEL} You may be using @percy/agent "
                 "which is no longer supported by this SDK. "
                 "Please uninstall @percy/agent and install @percy/cli instead. "
-                "https://docs.percy.io/docs/migrating-to-percy-cli"
+                "https://www.browserstack.com/docs/percy/migration/migrate-to-cli"
             )
             return False
 
@@ -73,7 +73,7 @@ def percy_snapshot(page, name, **kwargs):
             "percy_snapshot(). "
             "Please use percy_screenshot() function while using Percy with Automate. "
             "For more information on usage of PercyScreenshot, "
-            "refer https://docs.percy.io/docs/integrate-functional-testing-with-visual-testing"
+            "refer https://www.browserstack.com/docs/percy/integrate/functional-and-visual"
         )
 
     try:
@@ -126,7 +126,7 @@ def percy_automate_screenshot(page, name, options=None, **kwargs):
             "percy_screenshot(). Please use percy_snapshot() function for taking screenshot. "
             "percy_screenshot() should be used only while using Percy with Automate. "
             "For more information on usage of percy_snapshot(), "
-            "refer doc for your language https://docs.percy.io/docs/end-to-end-testing"
+            "refer doc for your language https://www.browserstack.com/docs/percy/integrate/overview"
         )
 
     if options is None:

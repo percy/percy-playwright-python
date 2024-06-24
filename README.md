@@ -60,7 +60,7 @@ $ percy exec -- [python test command]
 
 - `page` (**required**) - A playwright page instance
 - `name` (**required**) - The snapshot name; must be unique to each snapshot
-- `**kwargs` - [See per-snapshot configuration options](https://docs.percy.io/docs/cli-configuration#per-snapshot-configuration)
+- `**kwargs` - [See per-snapshot configuration options](https://www.browserstack.com/docs/percy/take-percy-snapshots/overview#per-snapshot-configuration)
 
 
 ## Percy on Automate
@@ -137,4 +137,4 @@ $ percy exec -- [python test command]
 [percy] Done!
 ```
 
-Refer to docs here: [Percy on Automate](https://docs.percy.io/docs/integrate-functional-testing-with-visual-testing)
+Refer to docs here: [Percy on Automate](https://www.browserstack.com/docs/percy/integrate/functional-and-visual)
