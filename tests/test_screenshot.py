@@ -162,7 +162,7 @@ class TestPercySnapshot(unittest.TestCase):
             mock_print.assert_called_with(
                 f"{LABEL} You may be using @percy/agent which is no longer supported by this SDK. "
                 "Please uninstall @percy/agent and install @percy/cli instead. "
-                "https://docs.percy.io/docs/migrating-to-percy-cli"
+                "https://www.browserstack.com/docs/percy/migration/migrate-to-cli"
             )
 
         self.assertEqual(httpretty.last_request().path, "/percy/healthcheck")
@@ -253,8 +253,8 @@ class TestPercySnapshot(unittest.TestCase):
             "Invalid function call - "
             "percy_snapshot(). Please use percy_screenshot() "
             "function while using Percy with Automate."
-            " For more information on usage of PercyScreenshot, refer https://docs.percy.io/docs"
-            "/integrate-functional-testing-with-visual-testing",
+            " For more information on usage of PercyScreenshot, refer https://www.browserstack.com/"
+            "docs/percy/integrate/functional-and-visual",
             str(context.exception),
         )
 
