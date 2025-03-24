@@ -61,6 +61,8 @@ def fetch_percy_dom():
     response.raise_for_status()
     return response.text
 
+# pylint: disable=too-many-arguments
+# pylint: disable=too-many-branches
 def create_region(
     boundingBox=None,
     elementXpath=None,

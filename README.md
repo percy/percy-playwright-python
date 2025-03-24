@@ -136,10 +136,10 @@ percy_screenshot(page, name = 'Screenshot 1')
         - `padding` (optional)
             - Specifies additional padding around the selected region.
             - Properties:
-              - `top` (string): Padding from the top.
-              - `left` (string): Padding from the left.
-              - `right` (string): Padding from the right.
-              - `bottom` (string): Padding from the bottom.
+              - `top` (number): Padding from the top.
+              - `left` (number): Padding from the left.
+              - `right` (number): Padding from the right.
+              - `bottom` (number): Padding from the bottom.
 
         - `algorithm` (mandatory)
             - Specifies the snapshot comparison algorithm.
