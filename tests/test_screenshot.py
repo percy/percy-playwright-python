@@ -369,7 +369,7 @@ class TestPercyFunctions(unittest.TestCase):
         self.assertTrue("Invalid function call" in str(context.exception))
 
 class TestCreateRegion(unittest.TestCase):
-    
+
     def test_create_region_with_all_params(self):
         result = create_region(
             boundingBox={"x": 10, "y": 20, "width": 100, "height": 200},
@@ -384,7 +384,7 @@ class TestCreateRegion(unittest.TestCase):
             adsEnabled=True,
             diffIgnoreThreshold=0.2
         )
-        
+
         expected_result = {
             "algorithm": "intelliignore",
             "elementSelector": {
@@ -404,7 +404,7 @@ class TestCreateRegion(unittest.TestCase):
                 "diffIgnoreThreshold": 0.2
             }
         }
-        
+
         self.assertEqual(result, expected_result)
 
     def test_create_region_with_minimal_params(self):
@@ -412,14 +412,14 @@ class TestCreateRegion(unittest.TestCase):
             algorithm="standard",
             boundingBox={"x": 10, "y": 20, "width": 100, "height": 200}
         )
-        
+
         expected_result = {
             "algorithm": "standard",
             "elementSelector": {
                 "boundingBox": {"x": 10, "y": 20, "width": 100, "height": 200}
             }
         }
-        
+
         self.assertEqual(result, expected_result)
 
     def test_create_region_with_padding(self):
@@ -427,13 +427,13 @@ class TestCreateRegion(unittest.TestCase):
             algorithm="ignore",
             padding=15
         )
-        
+
         expected_result = {
             "algorithm": "ignore",
             "elementSelector": {},
             "padding": 15
         }
-        
+
         self.assertEqual(result, expected_result)
 
     def test_create_region_with_configuration_only_for_valid_algorithms(self):
@@ -442,7 +442,7 @@ class TestCreateRegion(unittest.TestCase):
             diffSensitivity=0.9,
             imageIgnoreThreshold=0.7
         )
-        
+
         expected_result = {
             "algorithm": "intelliignore",
             "elementSelector": {},
@@ -451,7 +451,7 @@ class TestCreateRegion(unittest.TestCase):
                 "imageIgnoreThreshold": 0.7
             }
         }
-        
+
         self.assertEqual(result, expected_result)
 
     def test_create_region_with_diffIgnoreThreshold_in_assertion(self):
@@ -459,7 +459,7 @@ class TestCreateRegion(unittest.TestCase):
             algorithm="standard",
             diffIgnoreThreshold=0.3
         )
-        
+
         expected_result = {
             "algorithm": "standard",
             "elementSelector": {},
@@ -467,19 +467,19 @@ class TestCreateRegion(unittest.TestCase):
                 "diffIgnoreThreshold": 0.3
             }
         }
-        
+
         self.assertEqual(result, expected_result)
 
     def test_create_region_with_invalid_algorithm(self):
         result = create_region(
             algorithm="invalid_algorithm"
         )
-        
+
         expected_result = {
             "algorithm": "invalid_algorithm",
             "elementSelector": {}
         }
-        
+
         self.assertEqual(result, expected_result)
 
 

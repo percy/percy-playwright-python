@@ -62,17 +62,17 @@ def fetch_percy_dom():
     return response.text
 
 def create_region(
-    boundingBox=None, 
-    elementXpath=None, 
-    elementCSS=None, 
+    boundingBox=None,
+    elementXpath=None,
+    elementCSS=None,
     padding=None,
     algorithm="ignore",
-    diffSensitivity=None, 
-    imageIgnoreThreshold=None, 
+    diffSensitivity=None,
+    imageIgnoreThreshold=None,
     carouselsEnabled=None,
     bannersEnabled=None,
     adsEnabled=None,
-    diffIgnoreThreshold=None 
+    diffIgnoreThreshold=None
     ):
 
     element_selector = {}
