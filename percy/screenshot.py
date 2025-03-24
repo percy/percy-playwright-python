@@ -61,6 +61,61 @@ def fetch_percy_dom():
     response.raise_for_status()
     return response.text
 
+def create_region(
+    boundingBox=None, 
+    elementXpath=None, 
+    elementCSS=None, 
+    padding=None,
+    algorithm="ignore",
+    diffSensitivity=None, 
+    imageIgnoreThreshold=None, 
+    carouselsEnabled=None,
+    bannersEnabled=None,
+    adsEnabled=None,
+    diffIgnoreThreshold=None 
+    ):
+
+    element_selector = {}
+    if boundingBox:
+        element_selector["boundingBox"] = boundingBox
+    if elementXpath:
+        element_selector["elementXpath"] = elementXpath
+    if elementCSS:
+        element_selector["elementCSS"] = elementCSS
+
+    region = {
+        "algorithm": algorithm,
+        "elementSelector": element_selector
+    }
+
+    if padding:
+        region["padding"] = padding
+
+    configuration = {}
+    if algorithm in ["standard", "intelliignore"]:
+        if diffSensitivity is not None:
+            configuration["diffSensitivity"] = diffSensitivity
+        if imageIgnoreThreshold is not None:
+            configuration["imageIgnoreThreshold"] = imageIgnoreThreshold
+        if carouselsEnabled is not None:
+            configuration["carouselsEnabled"] = carouselsEnabled
+        if bannersEnabled is not None:
+            configuration["bannersEnabled"] = bannersEnabled
+        if adsEnabled is not None:
+            configuration["adsEnabled"] = adsEnabled
+
+    if configuration:
+        region["configuration"] = configuration
+
+    assertion = {}
+    if diffIgnoreThreshold is not None:
+        assertion["diffIgnoreThreshold"] = diffIgnoreThreshold
+
+    if assertion:
+        region["assertion"] = assertion
+
+    return region
+
 
 # Take a DOM snapshot and post it to the snapshot endpoint
 def percy_snapshot(page, name, **kwargs):
