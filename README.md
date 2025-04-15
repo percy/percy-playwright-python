@@ -170,7 +170,8 @@ obj1 = {
 
 # we can use the createRegion function
 
-from percy.screenshot import create_region
+from percy import percy_snapshot
+from percy.screenshot import (create_region)
 
 obj2 = create_region(
     algorithm="intellignore",
@@ -181,7 +182,7 @@ obj2 = create_region(
     diffIgnoreThreshold=0.4
 )
 
-percy_snapshot(page, name="Homepage", regions: [obj1]);
+percy_snapshot(page, name="Homepage", regions=[obj1]);
 ```
 
 
