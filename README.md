@@ -124,7 +124,7 @@ percy_screenshot(page, name = 'Screenshot 1')
         - `right` (int): Right coordinate of the consider region.
     - `regions` parameter that allows users to apply snapshot options to specific areas of the page. This parameter is an array where each object defines a custom region with configurations.
       - Parameters:
-        - `elementSelector` (optional)
+        - `elementSelector` (optional, only one of the following must be provided, if this is not provided then full page will be considered as region)
             - `boundingBox` (object): Defines the coordinates and size of the region.
               - `x` (number): X-coordinate of the region.
               - `y` (number): Y-coordinate of the region.
@@ -167,6 +167,19 @@ obj1 = {
     "diffIgnoreThreshold": 0.4,
   }
 };
+
+# we can use the createRegion function
+
+from percy.screenshot import create_region
+
+obj2 = create_region(
+    algorithm="intellignore",
+    diffSensitivity=2,
+    imageIgnoreThreshold=0.2,
+    carouselsEnabled=True,
+    adsEnabled=True,
+    diffIgnoreThreshold=0.4
+)
 
 percy_snapshot(page, name="Homepage", regions: [obj1]);
 ```
