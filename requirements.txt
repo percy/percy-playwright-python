@@ -1,2 +1,2 @@
-playwright==1.28.*
+playwright==1.52.*
 requests==2.*
