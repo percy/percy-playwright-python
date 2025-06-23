@@ -3,6 +3,7 @@ import json
 import platform
 from functools import lru_cache
 import requests
+import traceback
 
 from playwright._repo_version import version as PLAYWRIGHT_VERSION
 from percy.version import __version__ as SDK_VERSION
@@ -191,7 +192,6 @@ def percy_automate_screenshot(page, name, options=None, **kwargs):
     try:
         metadata = PageMetaData(page)
 
-        # Post to automateScreenshot endpoint with page options and other info
         response = requests.post(
             f"{PERCY_CLI_API}/percy/automateScreenshot",
             json={
@@ -210,15 +210,21 @@ def percy_automate_screenshot(page, name, options=None, **kwargs):
             timeout=600,
         )
 
-        # Handle errors
         response.raise_for_status()
-        data = response.json()
+        try:
+            data = response.json()
+        except Exception as json_err:
+            print(f"{LABEL} Failed to parse JSON: {json_err}")
+            traceback.print_exc()
+            return None
 
-        if not data["success"]:
-            raise Exception(data["error"])
+        if not data.get("success", False):
+            raise Exception(data.get("error", "Unknown error"))
 
         return data.get("data", None)
+
     except Exception as e:
         print(f'{LABEL} Could not take Screenshot "{name}"')
-        print(f"{LABEL} {e}")
+        print(f"{LABEL} Exception: {e}")
+        traceback.print_exc()
         return None
