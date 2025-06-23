@@ -24,6 +24,7 @@ LABEL = "[\u001b[35m" + ("percy:python" if PERCY_DEBUG else "percy") + "\u001b[3
 # Check if Percy is enabled, caching the result so it is only checked once
 @lru_cache(maxsize=None)
 def is_percy_enabled():
+    print(f"{LABEL} reached is_percy_enabled()")
     try:
         response = requests.get(f"{PERCY_CLI_API}/percy/healthcheck", timeout=30)
         response.raise_for_status()
@@ -46,7 +47,7 @@ def is_percy_enabled():
         if version.split(".")[0] != "1":
             print(f"{LABEL} Unsupported Percy CLI version, {version}")
             return False
-
+        print(f"{LABEL} ended is_percy_enabled()")
         return session_type
     except Exception as e:
         print(f"{LABEL} Percy is not running, disabling snapshots")
@@ -174,6 +175,7 @@ def percy_snapshot(page, name, **kwargs):
 
 
 def percy_automate_screenshot(page, name, options=None, **kwargs):
+    print(f"{LABEL} reached percy_automate_screenshot()")
     session_type = is_percy_enabled()
     if session_type is False:
         return None  # Since session_type can be None for old CLI version
@@ -188,10 +190,10 @@ def percy_automate_screenshot(page, name, options=None, **kwargs):
 
     if options is None:
         options = {}
-
+    print(f"{LABEL}  Inside percy_automate_screenshot() with options before try catch: {options}")
     try:
         metadata = PageMetaData(page)
-
+        print(f"{LABEL}  Inside percy_automate_screenshot() - metadata: {metadata}")
         response = requests.post(
             f"{PERCY_CLI_API}/percy/automateScreenshot",
             json={
@@ -209,10 +211,12 @@ def percy_automate_screenshot(page, name, options=None, **kwargs):
             },
             timeout=600,
         )
+        print(f"{LABEL}  Inside percy_automate_screenshot() - response: {response}")
 
         response.raise_for_status()
         try:
             data = response.json()
+            print(f"{LABEL}  Inside percy_automate_screenshot() - data: {data}")
         except Exception as json_err:
             print(f"{LABEL} Failed to parse JSON: {json_err}")
             traceback.print_exc()

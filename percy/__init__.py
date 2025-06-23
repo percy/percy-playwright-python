@@ -19,4 +19,5 @@ def percySnapshot(browser, *a, **kw):
 
 
 def percy_screenshot(page, *a, **kw):
+    print(f"{LABEL}  Inside percy_screenshot()")
     return percy_automate_screenshot(page, *a, **kw)
