@@ -1,4 +1,4 @@
-# pylint: disable=[abstract-class-instantiated, arguments-differ, protected-access]
+# pylint: disable=[abstract-class-instantiated, arguments-differ, protected-access, too-many-lines]
 import json
 import unittest
 import platform
@@ -51,7 +51,11 @@ data_object = {"sync": "true", "diff": 0}
 
 
 # mock helpers
-def mock_healthcheck(fail=False, fail_how="error", session_type=None, widths=None, config=None, device_details=None):
+# pylint: disable=too-many-arguments
+def mock_healthcheck(
+    fail=False, fail_how="error", session_type=None,
+    widths=None, config=None, device_details=None
+):
     health_body = {"success": True}
     health_headers = {"X-Percy-Core-Version": "1.0.0"}
     health_status = 200
@@ -84,7 +88,12 @@ def mock_healthcheck(fail=False, fail_how="error", session_type=None, widths=Non
     httpretty.register_uri(
         httpretty.GET,
         "http://localhost:5338/percy/dom.js",
-        body="window.PercyDOM = { serialize: () => { return { html: document.documentElement.outerHTML } }, waitForResize: () => { if(!window.resizeCount) { window.addEventListener('resize', () => window.resizeCount++) } window.resizeCount = 0; }}",
+        body=(
+            "window.PercyDOM = { serialize: () => { return { html: "
+            "document.documentElement.outerHTML } }, waitForResize: () => { "
+            "if(!window.resizeCount) { window.addEventListener('resize', () => "
+            "window.resizeCount++) } window.resizeCount = 0; }}"
+        ),
         status=200,
     )
 
@@ -490,10 +499,10 @@ class TestPercyFunctions(unittest.TestCase):
         """Test percy_automate_screenshot when Percy is not enabled."""
         is_percy_enabled.cache_clear()
         mock_is_percy_enabled.return_value = False
-        
+
         page = MagicMock()
         result = percy_automate_screenshot(page, "screenshot_name")
-        
+
         # Should return None when Percy is disabled
         self.assertIsNone(result)
 

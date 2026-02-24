@@ -10,11 +10,11 @@ class TestPercyInit(unittest.TestCase):
         """Test the percySnapshot backwards compatibility wrapper."""
         mock_page = MagicMock()
         mock_percy_snapshot.return_value = "snapshot_result"
-        
+
         # Call via percy module to test the wrapper
         # percySnapshot(browser, *a, **kw) calls percy_snapshot(page=browser, *a, **kw)
         result = percy.percySnapshot(mock_page, "test_name", some_option=True)
-        
+
         # Verify percy_snapshot was called correctly
         # Check that the function was called
         self.assertTrue(mock_percy_snapshot.called)
@@ -29,10 +29,10 @@ class TestPercyInit(unittest.TestCase):
         """Test the percy_screenshot wrapper."""
         mock_page = MagicMock()
         mock_automate_screenshot.return_value = "screenshot_result"
-        
+
         # Call via percy module to test the wrapper
         result = percy.percy_screenshot(mock_page, "test_name", options={"key": "value"})
-        
+
         # Verify percy_automate_screenshot was called correctly
         mock_automate_screenshot.assert_called_once_with(
             mock_page, "test_name", options={"key": "value"}
