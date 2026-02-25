@@ -163,7 +163,7 @@ def calculate_default_height(page, current_height, **kwargs):
         return page.evaluate(
             "(minH) => window.outerHeight - window.innerHeight + minH", min_height
         )
-    except Exception as exc:
+    except BaseException as exc:
         # Do not swallow control-flow exceptions that should terminate the program.
         if isinstance(exc, (KeyboardInterrupt, SystemExit)):
             raise
@@ -181,14 +181,14 @@ def get_widths_for_multi_dom(eligible_widths, device_details, default_height, **
     # Add mobile widths with their associated heights from device_details (if available)
     mobile_widths = eligible_widths.get("mobile", [])
     if mobile_widths:
-        for width in mobile_widths:
-            if width not in width_height_map:
+        for mobile_width in mobile_widths:
+            if mobile_width not in width_height_map:
                 device_info = next(
-                    (device for device in device_details if device.get("width") == width),
+                    (device for device in device_details if device.get("width") == mobile_width),
                     None,
                 )
-                width_height_map[width] = {
-                    "width": width,
+                width_height_map[mobile_width] = {
+                    "width": mobile_width,
                     "height": device_info.get("height", default_height)
                     if device_info
                     else default_height,
@@ -198,9 +198,9 @@ def get_widths_for_multi_dom(eligible_widths, device_details, default_height, **
     other_widths = (
         user_passed_widths if len(user_passed_widths) != 0 else eligible_widths.get("config", [])
     )
-    for width in other_widths:
-        if width not in width_height_map:
-            width_height_map[width] = {"width": width, "height": default_height}
+    for w in other_widths:
+        if w not in width_height_map:
+            width_height_map[w] = {"width": w, "height": default_height}
 
     return list(width_height_map.values())
 
