@@ -6,6 +6,7 @@ from time import sleep
 import requests
 
 from playwright._repo_version import version as PLAYWRIGHT_VERSION
+from playwright.sync_api import Error as PlaywrightError, TimeoutError as PlaywrightTimeoutError
 from percy.version import __version__ as SDK_VERSION
 from percy.page_metadata import PageMetaData
 
@@ -207,14 +208,14 @@ def get_widths_for_multi_dom(eligible_widths, device_details, default_height, **
 def change_window_dimension_and_wait(page, width, height, resize_count):
     try:
         page.set_viewport_size({"width": width, "height": height})
-    except Exception as e:
+    except PlaywrightError as e:
         log(f"Resizing viewport failed for width {width}: {e}", "debug")
 
     try:
         page.wait_for_function(
             f"window.resizeCount === {resize_count}", timeout=1000
         )
-    except Exception:
+    except PlaywrightTimeoutError:
         log(f"Timed out waiting for window resize event for width {width}", "debug")
 
 
