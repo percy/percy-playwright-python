@@ -7,7 +7,8 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from unittest.mock import patch, MagicMock, call
 import httpretty
 
-from playwright.sync_api import sync_playwright, Error as PlaywrightError, TimeoutError as PlaywrightTimeoutError
+from playwright.sync_api import sync_playwright
+from playwright.sync_api import Error as PlaywrightError, TimeoutError as PlaywrightTimeoutError
 from playwright._repo_version import version as PLAYWRIGHT_VERSION
 from percy.version import __version__ as SDK_VERSION
 from percy.screenshot import (
