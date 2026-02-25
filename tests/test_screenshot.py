@@ -8,6 +8,7 @@ from unittest.mock import patch, MagicMock, call
 import httpretty
 
 from playwright.sync_api import sync_playwright
+from playwright.sync_api import Error as PlaywrightError, TimeoutError as PlaywrightTimeoutError
 from playwright._repo_version import version as PLAYWRIGHT_VERSION
 from percy.version import __version__ as SDK_VERSION
 from percy.screenshot import (
@@ -616,8 +617,8 @@ class TestScreenshotEdgeCases(unittest.TestCase):
 
     def test_change_window_dimension_and_wait_errors(self):
         page = MagicMock()
-        page.set_viewport_size.side_effect = Exception("boom")
-        page.wait_for_function.side_effect = Exception("boom")
+        page.set_viewport_size.side_effect = PlaywrightError("boom")
+        page.wait_for_function.side_effect = PlaywrightTimeoutError("boom")
 
         with patch("percy.screenshot.log") as mock_log:
             change_window_dimension_and_wait(page, 100, 200, 1)
@@ -861,7 +862,7 @@ class TestResponsiveHelpers(unittest.TestCase):
 
     def test_calculate_default_height_env_enabled_handles_error(self):
         page = MagicMock()
-        page.evaluate.side_effect = Exception("boom")
+        page.evaluate.side_effect = PlaywrightError("boom")
         with patch.object(local, "PERCY_RESPONSIVE_CAPTURE_MIN_HEIGHT", "1"):
             self.assertEqual(calculate_default_height(page, 321), 321)
 
