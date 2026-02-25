@@ -796,6 +796,7 @@ class TestCreateRegion(unittest.TestCase):
         self.assertEqual(result, expected_result)
 
 
+# pylint: disable=too-many-public-methods
 class TestResponsiveHelpers(unittest.TestCase):
     def test_is_responsive_snapshot_capture_from_kwargs(self):
         self.assertTrue(is_responsive_snapshot_capture({}, responsive_snapshot_capture=True))
@@ -838,6 +839,13 @@ class TestResponsiveHelpers(unittest.TestCase):
         page.evaluate.side_effect = KeyboardInterrupt()
         with patch.object(local, "PERCY_RESPONSIVE_CAPTURE_MIN_HEIGHT", "1"):
             with self.assertRaises(KeyboardInterrupt):
+                calculate_default_height(page, 321)
+
+    def test_calculate_default_height_reraises_system_exit(self):
+        page = MagicMock()
+        page.evaluate.side_effect = SystemExit()
+        with patch.object(local, "PERCY_RESPONSIVE_CAPTURE_MIN_HEIGHT", "1"):
+            with self.assertRaises(SystemExit):
                 calculate_default_height(page, 321)
 
     def test_get_widths_for_multi_dom(self):
