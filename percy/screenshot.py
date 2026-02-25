@@ -246,7 +246,12 @@ def capture_responsive_dom(page, eligible_widths, device_details, cookies, **kwa
             page.evaluate(fetch_percy_dom())
 
         if RESPONSIVE_CAPTURE_SLEEP_TIME:
-            sleep(int(RESPONSIVE_CAPTURE_SLEEP_TIME))
+            try:
+                sleep_time = int(RESPONSIVE_CAPTURE_SLEEP_TIME)
+            except (TypeError, ValueError):
+                sleep_time = 0
+            if sleep_time > 0:
+                sleep(sleep_time)
         dom_snapshot = get_serialized_dom(page, cookies, **kwargs)
         dom_snapshot["width"] = width_height["width"]
         dom_snapshots.append(dom_snapshot)
