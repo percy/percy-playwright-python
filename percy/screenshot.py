@@ -1,6 +1,7 @@
 import os
 import json
 import platform
+from collections import OrderedDict
 from functools import lru_cache
 from time import sleep
 import requests
@@ -175,7 +176,7 @@ def get_widths_for_multi_dom(eligible_widths, device_details, default_height, **
     if width:
         user_passed_widths = [width]
 
-    width_height_map = {}
+    width_height_map = OrderedDict()
 
     # Add mobile widths with their associated heights from device_details (if available)
     mobile_widths = eligible_widths.get("mobile", [])
