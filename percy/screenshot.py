@@ -29,7 +29,7 @@ def log(message, lvl="info"):
         requests.post(
             f"{PERCY_CLI_API}/percy/log",
             json={"message": message, "level": lvl},
-            timeout=1,
+            timeout=5,
         )
     except Exception as e:
         if PERCY_DEBUG:
