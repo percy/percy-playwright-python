@@ -220,9 +220,10 @@ def change_window_dimension_and_wait(page, width, height, resize_count):
 
 
 def capture_responsive_dom(page, eligible_widths, device_details, cookies, **kwargs):
-    current_width = page.viewport_size["width"]
-    current_height = page.viewport_size["height"]
-    default_height = calculate_default_height(page, current_height, **kwargs)
+    viewport = page.viewport_size or page.evaluate(
+        "() => ({ width: window.innerWidth, height: window.innerHeight })"
+    )
+    default_height = calculate_default_height(page, viewport["height"], **kwargs)
 
     # Get width and height combinations
     width_heights = get_widths_for_multi_dom(
@@ -230,7 +231,7 @@ def capture_responsive_dom(page, eligible_widths, device_details, cookies, **kwa
     )
 
     dom_snapshots = []
-    last_window_width = current_width
+    last_window_width = viewport["width"]
     resize_count = 0
     page.evaluate("PercyDOM.waitForResize()")
 
@@ -258,7 +259,7 @@ def capture_responsive_dom(page, eligible_widths, device_details, cookies, **kwa
         dom_snapshots.append(dom_snapshot)
 
     change_window_dimension_and_wait(
-        page, current_width, current_height, resize_count + 1
+        page, viewport["width"], viewport["height"], resize_count + 1
     )
     return dom_snapshots
 

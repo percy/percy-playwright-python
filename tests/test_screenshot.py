@@ -650,6 +650,37 @@ class TestScreenshotEdgeCases(unittest.TestCase):
         page.evaluate.assert_any_call("PercyDOM.waitForResize()")
         mock_resize.assert_called_once_with(page, 800, 600, 1)
 
+    def test_capture_responsive_dom_none_viewport_falls_back_to_js(self):
+        page = MagicMock()
+        page.viewport_size = None
+        page.evaluate = MagicMock(
+            side_effect=lambda expr: {"width": 1024, "height": 768}
+            if "innerWidth" in expr
+            else None
+        )
+        page.reload = MagicMock()
+
+        with patch.object(local, "PERCY_RESPONSIVE_CAPTURE_RELOAD_PAGE", None), patch.object(
+            local, "RESPONSIVE_CAPTURE_SLEEP_TIME", None
+        ), patch(
+            "percy.screenshot.get_widths_for_multi_dom"
+        ) as mock_widths, patch(
+            "percy.screenshot.get_serialized_dom"
+        ) as mock_serialized, patch(
+            "percy.screenshot.change_window_dimension_and_wait"
+        ) as mock_resize:
+            mock_widths.return_value = [{"width": 1024, "height": 768}]
+            mock_serialized.return_value = {"html": "<html></html>"}
+
+            capture_responsive_dom(
+                page, {"config": [1024]}, [], [{"name": "foo", "value": "bar"}]
+            )
+
+        page.evaluate.assert_any_call(
+            "() => ({ width: window.innerWidth, height: window.innerHeight })"
+        )
+        mock_resize.assert_called_once_with(page, 1024, 768, 1)
+
     @patch("requests.post")
     @patch("percy.screenshot.fetch_percy_dom")
     @patch("percy.screenshot.is_percy_enabled")
