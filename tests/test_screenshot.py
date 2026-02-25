@@ -830,7 +830,7 @@ class TestResponsiveHelpers(unittest.TestCase):
 
     def test_calculate_default_height_env_enabled_handles_error(self):
         page = MagicMock()
-        page.evaluate.side_effect = Exception("boom")
+        page.evaluate.side_effect = PlaywrightError("boom")
         with patch.object(local, "PERCY_RESPONSIVE_CAPTURE_MIN_HEIGHT", "1"):
             self.assertEqual(calculate_default_height(page, 321), 321)
 

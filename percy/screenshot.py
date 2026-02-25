@@ -163,10 +163,7 @@ def calculate_default_height(page, current_height, **kwargs):
         return page.evaluate(
             "(minH) => window.outerHeight - window.innerHeight + minH", min_height
         )
-    except Exception as exc:
-        # Do not swallow control-flow exceptions that should terminate the program.
-        if isinstance(exc, (KeyboardInterrupt, SystemExit)):
-            raise
+    except PlaywrightError:
         return current_height
 
 
