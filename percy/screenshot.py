@@ -216,8 +216,16 @@ def change_window_dimension_and_wait(page, width, height, resize_count):
 
 
 def capture_responsive_dom(page, eligible_widths, device_details, cookies, **kwargs):
-    current_width = page.viewport_size["width"]
-    current_height = page.viewport_size["height"]
+    viewport = page.viewport_size
+    if viewport is not None:
+        current_width = viewport["width"]
+        current_height = viewport["height"]
+    else:
+        size = page.evaluate(
+            "() => ({ width: window.innerWidth, height: window.innerHeight })"
+        )
+        current_width = size["width"]
+        current_height = size["height"]
     default_height = calculate_default_height(page, current_height, **kwargs)
 
     # Get width and height combinations
