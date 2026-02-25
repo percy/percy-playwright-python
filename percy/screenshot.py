@@ -1,11 +1,13 @@
 import os
 import json
 import platform
+from collections import OrderedDict
 from functools import lru_cache
 from time import sleep
 import requests
 
 from playwright._repo_version import version as PLAYWRIGHT_VERSION
+from playwright.sync_api import Error as PlaywrightError, TimeoutError as PlaywrightTimeoutError
 from percy.version import __version__ as SDK_VERSION
 from percy.page_metadata import PageMetaData
 
@@ -29,7 +31,7 @@ def log(message, lvl="info"):
         requests.post(
             f"{PERCY_CLI_API}/percy/log",
             json={"message": message, "level": lvl},
-            timeout=1,
+            timeout=5,
         )
     except Exception as e:
         if PERCY_DEBUG:
@@ -162,7 +164,7 @@ def calculate_default_height(page, current_height, **kwargs):
         return page.evaluate(
             "(minH) => window.outerHeight - window.innerHeight + minH", min_height
         )
-    except Exception as exc:
+    except BaseException as exc:
         # Do not swallow control-flow exceptions that should terminate the program.
         if isinstance(exc, (KeyboardInterrupt, SystemExit)):
             raise
@@ -175,19 +177,19 @@ def get_widths_for_multi_dom(eligible_widths, device_details, default_height, **
     if width:
         user_passed_widths = [width]
 
-    width_height_map = {}
+    width_height_map = OrderedDict()
 
     # Add mobile widths with their associated heights from device_details (if available)
     mobile_widths = eligible_widths.get("mobile", [])
-    if len(mobile_widths) != 0:
-        for width in mobile_widths:
-            if width not in width_height_map:
+    if mobile_widths:
+        for mobile_width in mobile_widths:
+            if mobile_width not in width_height_map:
                 device_info = next(
-                    (device for device in device_details if device.get("width") == width),
+                    (device for device in device_details if device.get("width") == mobile_width),
                     None,
                 )
-                width_height_map[width] = {
-                    "width": width,
+                width_height_map[mobile_width] = {
+                    "width": mobile_width,
                     "height": device_info.get("height", default_height)
                     if device_info
                     else default_height,
@@ -197,9 +199,9 @@ def get_widths_for_multi_dom(eligible_widths, device_details, default_height, **
     other_widths = (
         user_passed_widths if len(user_passed_widths) != 0 else eligible_widths.get("config", [])
     )
-    for width in other_widths:
-        if width not in width_height_map:
-            width_height_map[width] = {"width": width, "height": default_height}
+    for w in other_widths:
+        if w not in width_height_map:
+            width_height_map[w] = {"width": w, "height": default_height}
 
     return list(width_height_map.values())
 
@@ -207,21 +209,22 @@ def get_widths_for_multi_dom(eligible_widths, device_details, default_height, **
 def change_window_dimension_and_wait(page, width, height, resize_count):
     try:
         page.set_viewport_size({"width": width, "height": height})
-    except Exception as e:
+    except PlaywrightError as e:
         log(f"Resizing viewport failed for width {width}: {e}", "debug")
 
     try:
         page.wait_for_function(
             f"window.resizeCount === {resize_count}", timeout=1000
         )
-    except Exception:
+    except PlaywrightTimeoutError:
         log(f"Timed out waiting for window resize event for width {width}", "debug")
 
 
 def capture_responsive_dom(page, eligible_widths, device_details, cookies, **kwargs):
-    current_width = page.viewport_size["width"]
-    current_height = page.viewport_size["height"]
-    default_height = calculate_default_height(page, current_height, **kwargs)
+    viewport = page.viewport_size or page.evaluate(
+        "() => ({ width: window.innerWidth, height: window.innerHeight })"
+    )
+    default_height = calculate_default_height(page, viewport["height"], **kwargs)
 
     # Get width and height combinations
     width_heights = get_widths_for_multi_dom(
@@ -229,7 +232,7 @@ def capture_responsive_dom(page, eligible_widths, device_details, cookies, **kwa
     )
 
     dom_snapshots = []
-    last_window_width = current_width
+    last_window_width = viewport["width"]
     resize_count = 0
     page.evaluate("PercyDOM.waitForResize()")
 
@@ -257,7 +260,7 @@ def capture_responsive_dom(page, eligible_widths, device_details, cookies, **kwa
         dom_snapshots.append(dom_snapshot)
 
     change_window_dimension_and_wait(
-        page, current_width, current_height, resize_count + 1
+        page, viewport["width"], viewport["height"], resize_count + 1
     )
     return dom_snapshots
 

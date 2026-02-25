@@ -8,6 +8,7 @@ from unittest.mock import patch, MagicMock, call
 import httpretty
 
 from playwright.sync_api import sync_playwright
+from playwright.sync_api import Error as PlaywrightError, TimeoutError as PlaywrightTimeoutError
 from playwright._repo_version import version as PLAYWRIGHT_VERSION
 from percy.version import __version__ as SDK_VERSION
 from percy.screenshot import (
@@ -616,8 +617,8 @@ class TestScreenshotEdgeCases(unittest.TestCase):
 
     def test_change_window_dimension_and_wait_errors(self):
         page = MagicMock()
-        page.set_viewport_size.side_effect = Exception("boom")
-        page.wait_for_function.side_effect = Exception("boom")
+        page.set_viewport_size.side_effect = PlaywrightError("boom")
+        page.wait_for_function.side_effect = PlaywrightTimeoutError("boom")
 
         with patch("percy.screenshot.log") as mock_log:
             change_window_dimension_and_wait(page, 100, 200, 1)
@@ -649,6 +650,37 @@ class TestScreenshotEdgeCases(unittest.TestCase):
         page.reload.assert_not_called()
         page.evaluate.assert_any_call("PercyDOM.waitForResize()")
         mock_resize.assert_called_once_with(page, 800, 600, 1)
+
+    def test_capture_responsive_dom_none_viewport_falls_back_to_js(self):
+        page = MagicMock()
+        page.viewport_size = None
+        page.evaluate = MagicMock(
+            side_effect=lambda expr: {"width": 1024, "height": 768}
+            if "innerWidth" in expr
+            else None
+        )
+        page.reload = MagicMock()
+
+        with patch.object(local, "PERCY_RESPONSIVE_CAPTURE_RELOAD_PAGE", None), patch.object(
+            local, "RESPONSIVE_CAPTURE_SLEEP_TIME", None
+        ), patch(
+            "percy.screenshot.get_widths_for_multi_dom"
+        ) as mock_widths, patch(
+            "percy.screenshot.get_serialized_dom"
+        ) as mock_serialized, patch(
+            "percy.screenshot.change_window_dimension_and_wait"
+        ) as mock_resize:
+            mock_widths.return_value = [{"width": 1024, "height": 768}]
+            mock_serialized.return_value = {"html": "<html></html>"}
+
+            capture_responsive_dom(
+                page, {"config": [1024]}, [], [{"name": "foo", "value": "bar"}]
+            )
+
+        page.evaluate.assert_any_call(
+            "() => ({ width: window.innerWidth, height: window.innerHeight })"
+        )
+        mock_resize.assert_called_once_with(page, 1024, 768, 1)
 
     @patch("requests.post")
     @patch("percy.screenshot.fetch_percy_dom")
@@ -796,6 +828,7 @@ class TestCreateRegion(unittest.TestCase):
         self.assertEqual(result, expected_result)
 
 
+# pylint: disable=too-many-public-methods
 class TestResponsiveHelpers(unittest.TestCase):
     def test_is_responsive_snapshot_capture_from_kwargs(self):
         self.assertTrue(is_responsive_snapshot_capture({}, responsive_snapshot_capture=True))
@@ -829,16 +862,23 @@ class TestResponsiveHelpers(unittest.TestCase):
 
     def test_calculate_default_height_env_enabled_handles_error(self):
         page = MagicMock()
-        page.evaluate.side_effect = Exception("boom")
+        page.evaluate.side_effect = PlaywrightError("boom")
         with patch.object(local, "PERCY_RESPONSIVE_CAPTURE_MIN_HEIGHT", "1"):
             self.assertEqual(calculate_default_height(page, 321), 321)
 
     def test_calculate_default_height_reraises_keyboard_interrupt(self):
         page = MagicMock()
-        page.evaluate.side_effect = KeyboardInterrupt("interrupted")
+        page.evaluate.side_effect = KeyboardInterrupt()
         with patch.object(local, "PERCY_RESPONSIVE_CAPTURE_MIN_HEIGHT", "1"):
             with self.assertRaises(KeyboardInterrupt):
-                calculate_default_height(page, 123)
+                calculate_default_height(page, 321)
+
+    def test_calculate_default_height_reraises_system_exit(self):
+        page = MagicMock()
+        page.evaluate.side_effect = SystemExit()
+        with patch.object(local, "PERCY_RESPONSIVE_CAPTURE_MIN_HEIGHT", "1"):
+            with self.assertRaises(SystemExit):
+                calculate_default_height(page, 321)
 
     def test_get_widths_for_multi_dom(self):
         eligible_widths = {"mobile": [375], "config": [1280]}
@@ -986,9 +1026,10 @@ class TestResponsiveHelpers(unittest.TestCase):
         page = MagicMock()
         page.viewport_size = {"width": 800, "height": 600}
         page.evaluate = MagicMock()
+        page.reload = MagicMock()
 
         with patch.object(local, "PERCY_RESPONSIVE_CAPTURE_RELOAD_PAGE", None), patch.object(
-            local, "RESPONSIVE_CAPTURE_SLEEP_TIME", "invalid"
+            local, "RESPONSIVE_CAPTURE_SLEEP_TIME", "not-a-number"
         ), patch(
             "percy.screenshot.get_widths_for_multi_dom"
         ) as mock_widths, patch(
