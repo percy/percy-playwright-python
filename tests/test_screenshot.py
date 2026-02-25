@@ -651,6 +651,37 @@ class TestScreenshotEdgeCases(unittest.TestCase):
         page.evaluate.assert_any_call("PercyDOM.waitForResize()")
         mock_resize.assert_called_once_with(page, 800, 600, 1)
 
+    def test_capture_responsive_dom_none_viewport_falls_back_to_js(self):
+        page = MagicMock()
+        page.viewport_size = None
+        page.evaluate = MagicMock(
+            side_effect=lambda expr: {"width": 1024, "height": 768}
+            if "innerWidth" in expr
+            else None
+        )
+        page.reload = MagicMock()
+
+        with patch.object(local, "PERCY_RESPONSIVE_CAPTURE_RELOAD_PAGE", None), patch.object(
+            local, "RESPONSIVE_CAPTURE_SLEEP_TIME", None
+        ), patch(
+            "percy.screenshot.get_widths_for_multi_dom"
+        ) as mock_widths, patch(
+            "percy.screenshot.get_serialized_dom"
+        ) as mock_serialized, patch(
+            "percy.screenshot.change_window_dimension_and_wait"
+        ) as mock_resize:
+            mock_widths.return_value = [{"width": 1024, "height": 768}]
+            mock_serialized.return_value = {"html": "<html></html>"}
+
+            capture_responsive_dom(
+                page, {"config": [1024]}, [], [{"name": "foo", "value": "bar"}]
+            )
+
+        page.evaluate.assert_any_call(
+            "() => ({ width: window.innerWidth, height: window.innerHeight })"
+        )
+        mock_resize.assert_called_once_with(page, 1024, 768, 1)
+
     @patch("requests.post")
     @patch("percy.screenshot.fetch_percy_dom")
     @patch("percy.screenshot.is_percy_enabled")
@@ -797,6 +828,7 @@ class TestCreateRegion(unittest.TestCase):
         self.assertEqual(result, expected_result)
 
 
+# pylint: disable=too-many-public-methods
 class TestResponsiveHelpers(unittest.TestCase):
     def test_is_responsive_snapshot_capture_from_kwargs(self):
         self.assertTrue(is_responsive_snapshot_capture({}, responsive_snapshot_capture=True))
@@ -833,6 +865,20 @@ class TestResponsiveHelpers(unittest.TestCase):
         page.evaluate.side_effect = PlaywrightError("boom")
         with patch.object(local, "PERCY_RESPONSIVE_CAPTURE_MIN_HEIGHT", "1"):
             self.assertEqual(calculate_default_height(page, 321), 321)
+
+    def test_calculate_default_height_reraises_keyboard_interrupt(self):
+        page = MagicMock()
+        page.evaluate.side_effect = KeyboardInterrupt()
+        with patch.object(local, "PERCY_RESPONSIVE_CAPTURE_MIN_HEIGHT", "1"):
+            with self.assertRaises(KeyboardInterrupt):
+                calculate_default_height(page, 321)
+
+    def test_calculate_default_height_reraises_system_exit(self):
+        page = MagicMock()
+        page.evaluate.side_effect = SystemExit()
+        with patch.object(local, "PERCY_RESPONSIVE_CAPTURE_MIN_HEIGHT", "1"):
+            with self.assertRaises(SystemExit):
+                calculate_default_height(page, 321)
 
     def test_get_widths_for_multi_dom(self):
         eligible_widths = {"mobile": [375], "config": [1280]}
@@ -975,6 +1021,32 @@ class TestResponsiveHelpers(unittest.TestCase):
         )
         self.assertEqual(result[0]["width"], 800)
         self.assertEqual(result[1]["width"], 1200)
+
+    def test_capture_responsive_dom_invalid_sleep_time(self):
+        page = MagicMock()
+        page.viewport_size = {"width": 800, "height": 600}
+        page.evaluate = MagicMock()
+        page.reload = MagicMock()
+
+        with patch.object(local, "PERCY_RESPONSIVE_CAPTURE_RELOAD_PAGE", None), patch.object(
+            local, "RESPONSIVE_CAPTURE_SLEEP_TIME", "not-a-number"
+        ), patch(
+            "percy.screenshot.get_widths_for_multi_dom"
+        ) as mock_widths, patch(
+            "percy.screenshot.get_serialized_dom"
+        ) as mock_serialized, patch(
+            "percy.screenshot.change_window_dimension_and_wait"
+        ), patch(
+            "percy.screenshot.sleep"
+        ) as mock_sleep:
+            mock_widths.return_value = [{"width": 800, "height": 600}]
+            mock_serialized.return_value = {"html": "<html></html>"}
+
+            capture_responsive_dom(
+                page, {"config": [800]}, [], [{"name": "foo", "value": "bar"}]
+            )
+
+        mock_sleep.assert_not_called()
 
     def test_create_region_with_minimal_params(self):
         result = create_region(
