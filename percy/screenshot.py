@@ -1,6 +1,7 @@
 import os
 import json
 import platform
+from collections import OrderedDict
 from functools import lru_cache
 from time import sleep
 import requests
@@ -29,7 +30,7 @@ def log(message, lvl="info"):
         requests.post(
             f"{PERCY_CLI_API}/percy/log",
             json={"message": message, "level": lvl},
-            timeout=1,
+            timeout=5,
         )
     except Exception as e:
         if PERCY_DEBUG:
@@ -162,7 +163,10 @@ def calculate_default_height(page, current_height, **kwargs):
         return page.evaluate(
             "(minH) => window.outerHeight - window.innerHeight + minH", min_height
         )
-    except Exception:
+    except Exception as exc:
+        # Do not swallow control-flow exceptions that should terminate the program.
+        if isinstance(exc, (KeyboardInterrupt, SystemExit)):
+            raise
         return current_height
 
 
@@ -172,11 +176,11 @@ def get_widths_for_multi_dom(eligible_widths, device_details, default_height, **
     if width:
         user_passed_widths = [width]
 
-    width_height_map = {}
+    width_height_map = OrderedDict()
 
     # Add mobile widths with their associated heights from device_details (if available)
     mobile_widths = eligible_widths.get("mobile", [])
-    if len(mobile_widths) != 0:
+    if mobile_widths:
         for mobile_width in mobile_widths:
             if mobile_width not in width_height_map:
                 device_info = next(
@@ -243,7 +247,12 @@ def capture_responsive_dom(page, eligible_widths, device_details, cookies, **kwa
             page.evaluate(fetch_percy_dom())
 
         if RESPONSIVE_CAPTURE_SLEEP_TIME:
-            sleep(int(RESPONSIVE_CAPTURE_SLEEP_TIME))
+            try:
+                sleep_time = int(RESPONSIVE_CAPTURE_SLEEP_TIME)
+            except (TypeError, ValueError):
+                sleep_time = 0
+            if sleep_time > 0:
+                sleep(sleep_time)
         dom_snapshot = get_serialized_dom(page, cookies, **kwargs)
         dom_snapshot["width"] = width_height["width"]
         dom_snapshots.append(dom_snapshot)
