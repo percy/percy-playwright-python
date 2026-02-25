@@ -176,7 +176,7 @@ def get_widths_for_multi_dom(eligible_widths, device_details, default_height, **
 
     # Add mobile widths with their associated heights from device_details (if available)
     mobile_widths = eligible_widths.get("mobile", [])
-    if len(mobile_widths) != 0:
+    if mobile_widths:
         for width in mobile_widths:
             if width not in width_height_map:
                 device_info = next(
