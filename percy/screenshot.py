@@ -42,7 +42,7 @@ def log(message, lvl="info"):
 
 # Check if Percy is enabled, caching the result so it is only checked once
 @lru_cache(maxsize=None)
-def is_percy_enabled():
+def _is_percy_enabled():
     try:
         response = requests.get(f"{PERCY_CLI_API}/percy/healthcheck", timeout=30)
         response.raise_for_status()
@@ -279,7 +279,7 @@ def is_responsive_snapshot_capture(config, **kwargs):
 
 # Take a DOM snapshot and post it to the snapshot endpoint
 def percy_snapshot(page, name, **kwargs):
-    data = is_percy_enabled()
+    data = _is_percy_enabled()
     if not data:
         return None
 
@@ -335,7 +335,7 @@ def percy_snapshot(page, name, **kwargs):
 
 
 def percy_automate_screenshot(page, name, options=None, **kwargs):
-    data = is_percy_enabled()
+    data = _is_percy_enabled()
     if not data:
         return None
 
