@@ -12,7 +12,7 @@ from playwright.sync_api import Error as PlaywrightError, TimeoutError as Playwr
 from playwright._repo_version import version as PLAYWRIGHT_VERSION
 from percy.version import __version__ as SDK_VERSION
 from percy.screenshot import (
-    is_percy_enabled,
+    _is_percy_enabled,
     fetch_percy_dom,
     percy_snapshot,
     percy_automate_screenshot,
@@ -141,7 +141,7 @@ class TestPercySnapshot(unittest.TestCase):
 
     def setUp(self):
         # clear the cached value for testing
-        local.is_percy_enabled.cache_clear()
+        local._is_percy_enabled.cache_clear()
         local.fetch_percy_dom.cache_clear()
         self.page.goto("http://localhost:8000")
         httpretty.enable()
@@ -310,7 +310,7 @@ class TestPercyFunctions(unittest.TestCase):
         mock_get.return_value.headers = {"x-percy-core-version": "1.0.0"}
 
         self.assertEqual(
-            is_percy_enabled(),
+            _is_percy_enabled(),
             {
                 "session_type": "web",
                 "config": {},
@@ -320,11 +320,11 @@ class TestPercyFunctions(unittest.TestCase):
         )
 
         # Clear the cache to test the unsuccessful scenario
-        is_percy_enabled.cache_clear()
+        _is_percy_enabled.cache_clear()
 
         # Mock unsuccessful health check
         mock_get.return_value.json.return_value = {"success": False, "error": "error"}
-        self.assertFalse(is_percy_enabled())
+        self.assertFalse(_is_percy_enabled())
 
     @patch("requests.get")
     def test_fetch_percy_dom(self, mock_get):
@@ -345,7 +345,7 @@ class TestPercyFunctions(unittest.TestCase):
 
     @patch("requests.post")
     @patch("percy.screenshot.fetch_percy_dom")
-    @patch("percy.screenshot.is_percy_enabled")
+    @patch("percy.screenshot._is_percy_enabled")
     def test_percy_snapshot(
         self, mock_is_percy_enabled, mock_fetch_percy_dom, mock_post
     ):
@@ -376,7 +376,7 @@ class TestPercyFunctions(unittest.TestCase):
 
     @patch("requests.post")
     @patch("percy.screenshot.fetch_percy_dom")
-    @patch("percy.screenshot.is_percy_enabled")
+    @patch("percy.screenshot._is_percy_enabled")
     def test_percy_snapshot_includes_cookies(
         self, mock_is_percy_enabled, mock_fetch_percy_dom, mock_post
     ):
@@ -407,7 +407,7 @@ class TestPercyFunctions(unittest.TestCase):
     @patch("requests.post")
     @patch("percy.screenshot.capture_responsive_dom")
     @patch("percy.screenshot.fetch_percy_dom")
-    @patch("percy.screenshot.is_percy_enabled")
+    @patch("percy.screenshot._is_percy_enabled")
     def test_percy_snapshot_responsive_capture(
         self,
         mock_is_percy_enabled,
@@ -448,10 +448,10 @@ class TestPercyFunctions(unittest.TestCase):
         self.assertEqual(posted["dom_snapshot"], mock_capture_responsive_dom.return_value)
 
     @patch("requests.post")
-    @patch("percy.screenshot.is_percy_enabled")
+    @patch("percy.screenshot._is_percy_enabled")
     def test_percy_automate_screenshot(self, mock_is_percy_enabled, mock_post):
         # Mock Percy enabled for automate
-        is_percy_enabled.cache_clear()
+        _is_percy_enabled.cache_clear()
         mock_is_percy_enabled.return_value = {
             "session_type": "automate",
             "config": {},
@@ -495,10 +495,10 @@ class TestPercyFunctions(unittest.TestCase):
             timeout=600,
         )
 
-    @patch("percy.screenshot.is_percy_enabled")
+    @patch("percy.screenshot._is_percy_enabled")
     def test_percy_automate_screenshot_percy_disabled(self, mock_is_percy_enabled):
         """Test percy_automate_screenshot when Percy is not enabled."""
-        is_percy_enabled.cache_clear()
+        _is_percy_enabled.cache_clear()
         mock_is_percy_enabled.return_value = False
 
         page = MagicMock()
@@ -507,7 +507,7 @@ class TestPercyFunctions(unittest.TestCase):
         # Should return None when Percy is disabled
         self.assertIsNone(result)
 
-    @patch("percy.screenshot.is_percy_enabled")
+    @patch("percy.screenshot._is_percy_enabled")
     def test_percy_automate_screenshot_invalid_call(self, mock_is_percy_enabled):
         # Mock Percy enabled for web
         mock_is_percy_enabled.return_value = {
@@ -525,11 +525,11 @@ class TestPercyFunctions(unittest.TestCase):
         self.assertTrue("Invalid function call" in str(context.exception))
 
     @patch("requests.post")
-    @patch("percy.screenshot.is_percy_enabled")
+    @patch("percy.screenshot._is_percy_enabled")
     def test_percy_automate_screenshot_with_options(self, mock_is_percy_enabled, mock_post):
         """Test percy_automate_screenshot when options are provided (not None)."""
         # Mock Percy enabled for automate
-        is_percy_enabled.cache_clear()
+        _is_percy_enabled.cache_clear()
         mock_is_percy_enabled.return_value = {
             "session_type": "automate",
             "config": {},
@@ -562,14 +562,14 @@ class TestPercyFunctions(unittest.TestCase):
 
 class TestScreenshotEdgeCases(unittest.TestCase):
     def setUp(self):
-        is_percy_enabled.cache_clear()
+        _is_percy_enabled.cache_clear()
         fetch_percy_dom.cache_clear()
 
     @patch("requests.get")
     def test_is_percy_enabled_request_error(self, mock_get):
         mock_get.side_effect = Exception("boom")
         with patch.object(local, "PERCY_DEBUG", True), patch("builtins.print") as mock_print:
-            self.assertFalse(is_percy_enabled())
+            self.assertFalse(_is_percy_enabled())
             mock_print.assert_any_call(
                 f"{LABEL} Percy is not running, disabling snapshots"
             )
@@ -579,7 +579,7 @@ class TestScreenshotEdgeCases(unittest.TestCase):
         mock_get.return_value.raise_for_status.side_effect = Exception("boom")
         mock_get.return_value.json.return_value = {"success": True}
         with patch.object(local, "PERCY_DEBUG", False):
-            self.assertFalse(is_percy_enabled())
+            self.assertFalse(_is_percy_enabled())
 
     def test_log_debug_when_enabled(self):
         with patch("requests.post", side_effect=Exception("boom")), patch.object(
@@ -684,7 +684,7 @@ class TestScreenshotEdgeCases(unittest.TestCase):
 
     @patch("requests.post")
     @patch("percy.screenshot.fetch_percy_dom")
-    @patch("percy.screenshot.is_percy_enabled")
+    @patch("percy.screenshot._is_percy_enabled")
     def test_percy_snapshot_response_error(
         self, mock_is_percy_enabled, mock_fetch_percy_dom, mock_post
     ):
@@ -713,7 +713,7 @@ class TestScreenshotEdgeCases(unittest.TestCase):
 
     @patch("requests.post")
     @patch("percy.screenshot.fetch_percy_dom")
-    @patch("percy.screenshot.is_percy_enabled")
+    @patch("percy.screenshot._is_percy_enabled")
     def test_percy_snapshot_request_error(
         self, mock_is_percy_enabled, mock_fetch_percy_dom, mock_post
     ):
@@ -737,7 +737,7 @@ class TestScreenshotEdgeCases(unittest.TestCase):
         mock_log.assert_any_call('Could not take DOM snapshot "snapshot_name"')
 
     @patch("requests.post")
-    @patch("percy.screenshot.is_percy_enabled")
+    @patch("percy.screenshot._is_percy_enabled")
     def test_percy_automate_screenshot_response_error(
         self, mock_is_percy_enabled, mock_post
     ):
@@ -765,7 +765,7 @@ class TestScreenshotEdgeCases(unittest.TestCase):
         mock_log.assert_any_call('Could not take Screenshot "screenshot_name"')
 
     @patch("requests.post")
-    @patch("percy.screenshot.is_percy_enabled")
+    @patch("percy.screenshot._is_percy_enabled")
     def test_percy_automate_screenshot_request_error(
         self, mock_is_percy_enabled, mock_post
     ):
@@ -1042,9 +1042,30 @@ class TestResponsiveHelpers(unittest.TestCase):
             mock_widths.return_value = [{"width": 800, "height": 600}]
             mock_serialized.return_value = {"html": "<html></html>"}
 
-            capture_responsive_dom(
-                page, {"config": [800]}, [], [{"name": "foo", "value": "bar"}]
-            )
+            capture_responsive_dom(page, {"config": [800]}, [], [])
+
+        mock_sleep.assert_not_called()
+
+    def test_capture_responsive_dom_zero_sleep_time(self):
+        page = MagicMock()
+        page.viewport_size = {"width": 800, "height": 600}
+        page.evaluate = MagicMock()
+
+        with patch.object(local, "PERCY_RESPONSIVE_CAPTURE_RELOAD_PAGE", None), patch.object(
+            local, "RESPONSIVE_CAPTURE_SLEEP_TIME", "0"
+        ), patch(
+            "percy.screenshot.get_widths_for_multi_dom"
+        ) as mock_widths, patch(
+            "percy.screenshot.get_serialized_dom"
+        ) as mock_serialized, patch(
+            "percy.screenshot.change_window_dimension_and_wait"
+        ), patch(
+            "percy.screenshot.sleep"
+        ) as mock_sleep:
+            mock_widths.return_value = [{"width": 800, "height": 600}]
+            mock_serialized.return_value = {"html": "<html></html>"}
+
+            capture_responsive_dom(page, {"config": [800]}, [], [])
 
         mock_sleep.assert_not_called()
 
