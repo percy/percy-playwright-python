@@ -1,7 +1,6 @@
 import os
 import json
 import platform
-from collections import OrderedDict
 from functools import lru_cache
 from time import sleep
 import requests
@@ -171,39 +170,29 @@ def calculate_default_height(page, current_height, **kwargs):
         return current_height
 
 
-def get_widths_for_multi_dom(eligible_widths, device_details, default_height, **kwargs):
-    user_passed_widths = kwargs.get("widths", [])
-    width = kwargs.get("width")
-    if width:
-        user_passed_widths = [width]
-
-    width_height_map = OrderedDict()
-
-    # Add mobile widths with their associated heights from device_details (if available)
-    mobile_widths = eligible_widths.get("mobile", [])
-    if mobile_widths:
-        for mobile_width in mobile_widths:
-            if mobile_width not in width_height_map:
-                device_info = next(
-                    (device for device in device_details if device.get("width") == mobile_width),
-                    None,
-                )
-                width_height_map[mobile_width] = {
-                    "width": mobile_width,
-                    "height": device_info.get("height", default_height)
-                    if device_info
-                    else default_height,
-                }
-
-    # Add user passed or config widths with default height
-    other_widths = (
-        user_passed_widths if len(user_passed_widths) != 0 else eligible_widths.get("config", [])
-    )
-    for w in other_widths:
-        if w not in width_height_map:
-            width_height_map[w] = {"width": w, "height": default_height}
-
-    return list(width_height_map.values())
+def get_responsive_widths(widths=None):
+    """Gets computed responsive widths from the Percy server for responsive snapshot capture."""
+    if widths is None:
+        widths = []
+    try:
+        # Ensure widths is a list
+        widths_list = widths if isinstance(widths, list) else []
+        query_param = f"?widths={','.join(map(str, widths_list))}" if widths_list else ""
+        response = requests.get(
+            f"{PERCY_CLI_API}/percy/widths-config{query_param}",
+            timeout=30
+        )
+        response.raise_for_status()
+        data = response.json()
+        widths_data = data.get("widths")
+        if not isinstance(widths_data, list):
+            msg = "Update Percy CLI to the latest version to use responsiveSnapshotCapture"
+            raise Exception(msg)
+        return widths_data
+    except Exception as e:
+        log(f"Failed to get responsive widths: {e}.", "debug")
+        msg = "Update Percy CLI to the latest version to use responsiveSnapshotCapture"
+        raise Exception(msg) from e
 
 
 def change_window_dimension_and_wait(page, width, height, resize_count):
@@ -220,16 +209,14 @@ def change_window_dimension_and_wait(page, width, height, resize_count):
         log(f"Timed out waiting for window resize event for width {width}", "debug")
 
 
-def capture_responsive_dom(page, eligible_widths, device_details, cookies, **kwargs):
+def capture_responsive_dom(page, cookies, **kwargs):
     viewport = page.viewport_size or page.evaluate(
         "() => ({ width: window.innerWidth, height: window.innerHeight })"
     )
     default_height = calculate_default_height(page, viewport["height"], **kwargs)
 
-    # Get width and height combinations
-    width_heights = get_widths_for_multi_dom(
-        eligible_widths, device_details, default_height, **kwargs
-    )
+    # Get width and height combinations from CLI
+    width_heights = get_responsive_widths(kwargs.get("widths", []))
 
     dom_snapshots = []
     last_window_width = viewport["width"]
@@ -237,12 +224,15 @@ def capture_responsive_dom(page, eligible_widths, device_details, cookies, **kwa
     page.evaluate("PercyDOM.waitForResize()")
 
     for width_height in width_heights:
-        if last_window_width != width_height["width"]:
+        # Apply default height if not provided by CLI
+        height = width_height.get("height") or default_height
+        width = width_height["width"]
+        if last_window_width != width:
             resize_count += 1
             change_window_dimension_and_wait(
-                page, width_height["width"], width_height["height"], resize_count
+                page, width, height, resize_count
             )
-            last_window_width = width_height["width"]
+            last_window_width = width
 
         if PERCY_RESPONSIVE_CAPTURE_RELOAD_PAGE:
             page.reload()
@@ -256,7 +246,7 @@ def capture_responsive_dom(page, eligible_widths, device_details, cookies, **kwa
             if sleep_time > 0:
                 sleep(sleep_time)
         dom_snapshot = get_serialized_dom(page, cookies, **kwargs)
-        dom_snapshot["width"] = width_height["width"]
+        dom_snapshot["width"] = width
         dom_snapshots.append(dom_snapshot)
 
     change_window_dimension_and_wait(
@@ -302,9 +292,7 @@ def percy_snapshot(page, name, **kwargs):
 
         # Serialize and capture the DOM
         if is_responsive_snapshot_capture(data["config"], **kwargs):
-            dom_snapshot = capture_responsive_dom(
-                page, data["widths"], data["device_details"], cookies, **kwargs
-            )
+            dom_snapshot = capture_responsive_dom(page, cookies, **kwargs)
         else:
             dom_snapshot = get_serialized_dom(page, cookies, **kwargs)
 
