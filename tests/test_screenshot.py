@@ -22,6 +22,8 @@ from percy.screenshot import (
     get_responsive_widths,
     capture_responsive_dom,
     change_window_dimension_and_wait,
+    get_serialized_dom,
+    process_frame,
     log
 )
 import percy.screenshot as local
@@ -404,6 +406,115 @@ class TestPercyFunctions(unittest.TestCase):
             posted["dom_snapshot"]["cookies"], [{"name": "foo", "value": "bar"}]
         )
 
+    def test_process_frame_returns_cors_iframe_data(self):
+        page = MagicMock()
+        page.evaluate.return_value = {"percyElementId": "iframe-1"}
+
+        frame = MagicMock()
+        frame.url = "http://cross-origin.example/frame"
+        frame.evaluate.side_effect = [None, {"html": "<iframe></iframe>"}]
+
+        result = process_frame(
+            page,
+            frame,
+            {"enableJavaScript": False},
+            "percy-dom-script"
+        )
+
+        self.assertEqual(
+            result,
+            {
+                "iframeData": {"percyElementId": "iframe-1"},
+                "iframeSnapshot": {"html": "<iframe></iframe>"},
+                "frameUrl": "http://cross-origin.example/frame",
+            },
+        )
+
+    def test_get_serialized_dom_adds_cors_iframes(self):
+        page = MagicMock()
+        page.url = "http://example.com"
+        page.evaluate.return_value = {"html": "<html></html>"}
+
+        same_origin_frame = MagicMock()
+        same_origin_frame.url = "http://example.com/frame"
+        cross_origin_frame = MagicMock()
+        cross_origin_frame.url = "http://other.example/frame"
+        page.frames = [same_origin_frame, cross_origin_frame]
+
+        with patch("percy.screenshot.process_frame") as mock_process:
+            mock_process.return_value = {"frameUrl": "http://other.example/frame"}
+            dom_snapshot = get_serialized_dom(
+                page,
+                [{"name": "foo", "value": "bar"}],
+                percy_dom_script="percy-dom"
+            )
+
+        mock_process.assert_called_once_with(page, cross_origin_frame, {}, "percy-dom")
+        self.assertEqual(
+            dom_snapshot["corsIframes"],
+            [{"frameUrl": "http://other.example/frame"}]
+        )
+        self.assertEqual(
+            dom_snapshot["cookies"],
+            [{"name": "foo", "value": "bar"}]
+        )
+
+    def test_process_frame_returns_none_on_error(self):
+        page = MagicMock()
+        frame = MagicMock()
+        frame.url = "http://cross-origin.example/frame"
+        frame.evaluate.side_effect = Exception("boom")
+
+        with patch("percy.screenshot.log") as mock_log:
+            result = process_frame(page, frame, {}, "percy-dom-script")
+
+        self.assertIsNone(result)
+        mock_log.assert_called_once()
+
+    def test_get_serialized_dom_skips_empty_cors_results(self):
+        page = MagicMock()
+        page.url = "http://example.com"
+        page.evaluate.return_value = {"html": "<html></html>"}
+        cross_origin_frame = MagicMock()
+        cross_origin_frame.url = "http://other.example/frame"
+        page.frames = [cross_origin_frame]
+
+        with patch("percy.screenshot.process_frame") as mock_process:
+            mock_process.return_value = None
+            dom_snapshot = get_serialized_dom(
+                page,
+                [{"name": "foo", "value": "bar"}],
+                percy_dom_script="percy-dom"
+            )
+
+        self.assertNotIn("corsIframes", dom_snapshot)
+        self.assertEqual(
+            dom_snapshot["cookies"],
+            [{"name": "foo", "value": "bar"}]
+        )
+
+    def test_get_serialized_dom_logs_when_frame_processing_fails(self):
+        class BadUrl:
+            def __str__(self):
+                raise Exception("boom")
+
+        page = MagicMock()
+        page.url = BadUrl()
+        page.evaluate.return_value = {"html": "<html></html>"}
+
+        with patch("percy.screenshot.log") as mock_log:
+            dom_snapshot = get_serialized_dom(
+                page,
+                [{"name": "foo", "value": "bar"}],
+                percy_dom_script="percy-dom"
+            )
+
+        mock_log.assert_called_once()
+        self.assertEqual(
+            dom_snapshot["cookies"],
+            [{"name": "foo", "value": "bar"}]
+        )
+
     @patch("requests.post")
     @patch("percy.screenshot.capture_responsive_dom")
     @patch("percy.screenshot.fetch_percy_dom")
@@ -439,6 +550,7 @@ class TestPercyFunctions(unittest.TestCase):
         mock_capture_responsive_dom.assert_called_once_with(
             page,
             [{"name": "foo", "value": "bar"}],
+            "some_js_code",
         )
         posted = mock_post.call_args.kwargs["json"]
         self.assertEqual(posted["dom_snapshot"], mock_capture_responsive_dom.return_value)
@@ -972,14 +1084,14 @@ class TestResponsiveHelpers(unittest.TestCase):
 
         page.evaluate.assert_any_call("PercyDOM.waitForResize()")
         page.evaluate.assert_any_call("dom-script")
-        self.assertEqual(page.evaluate.call_count, 3)
+        self.assertEqual(page.evaluate.call_count, 5)
         self.assertEqual(page.reload.call_count, 2)
         mock_sleep.assert_any_call(1)
         self.assertEqual(mock_sleep.call_count, 2)
         mock_resize.assert_has_calls(
             [
                 call(page, 1200, 700, 1),
-                call(page, 800, 600, 2),
+                call(page, 800, 600, 1),
             ]
         )
         self.assertEqual(result[0]["width"], 800)
