@@ -3,6 +3,7 @@ import json
 import platform
 from functools import lru_cache
 from time import sleep
+from urllib.parse import urlparse
 import requests
 
 from playwright._repo_version import version as PLAYWRIGHT_VERSION
@@ -90,6 +91,101 @@ def fetch_percy_dom():
     response.raise_for_status()
     return response.text
 
+
+def process_frame(page, frame, options, percy_dom_script):
+    """
+    Processes a single cross-origin frame to capture its snapshot and resources.
+
+    Args:
+        page: The main page object
+        frame: The frame to process
+        options: Snapshot options
+        percy_dom_script: The Percy DOM serialization script
+
+    Returns:
+        Dictionary containing iframe data, snapshot, and URL
+    """
+    frame_url = frame.url
+
+    try:
+        # Inject Percy DOM into the cross-origin frame
+        frame.evaluate(percy_dom_script)
+
+        # enableJavaScript=True prevents the standard iframe serialization logic from running.
+        # This is necessary because we're manually handling cross-origin iframe serialization here.
+        iframe_snapshot = frame.evaluate(
+            f"PercyDOM.serialize({json.dumps({**options, 'enableJavaScript': True})})"
+        )
+
+        # Get the iframe's element data from the main page context
+        iframe_data = page.evaluate(
+            """(fUrl) => {
+                const iframes = Array.from(document.querySelectorAll('iframe'));
+                const matchingIframe = iframes.find(iframe => iframe.src.startsWith(fUrl));
+                if (matchingIframe) {{
+                    return {{
+                        percyElementId: matchingIframe.getAttribute('data-percy-element-id')
+                    }};
+                }}
+            }""",
+            frame_url
+        )
+
+        return {
+            "iframeData": iframe_data,
+            "iframeSnapshot": iframe_snapshot,
+            "frameUrl": frame_url
+        }
+    except Exception as e:
+        log(f"Failed to process cross-origin frame {frame_url}: {e}", "debug")
+        return None
+
+
+def get_serialized_dom(page, cookies, percy_dom_script=None, **kwargs):
+    """
+    Serializes the DOM and captures cross-origin iframes.
+
+    Args:
+        page: The page object
+        cookies: Page cookies
+        percy_dom_script: The Percy DOM serialization script
+        **kwargs: Additional options
+
+    Returns:
+        Dictionary containing the DOM snapshot with cross-origin iframe data
+    """
+    dom_snapshot = page.evaluate(f"PercyDOM.serialize({json.dumps(kwargs)})")
+
+    # Process CORS IFrames
+    # Note: Blob URL handling (data-src images, blob background images) is now handled
+    # in the CLI via async DOM serialization. This section only handles cross-origin
+    # iframe serialization and resource merging.
+    try:
+        page_url = urlparse(page.url)
+        frames = page.frames
+
+        # Filter for cross-origin frames (excluding about:blank)
+        cross_origin_frames = [
+            frame for frame in frames
+            if frame.url != "about:blank" and urlparse(frame.url).netloc != page_url.netloc
+        ]
+
+        if cross_origin_frames and percy_dom_script:
+            processed_frames = []
+            for frame in cross_origin_frames:
+                result = process_frame(page, frame, kwargs, percy_dom_script)
+                if result:
+                    processed_frames.append(result)
+
+            if processed_frames:
+                dom_snapshot["corsIframes"] = processed_frames
+    except Exception as e:
+        log(f"Failed to process cross-origin iframes: {e}", "debug")
+
+    dom_snapshot["cookies"] = cookies
+    return dom_snapshot
+
+
 # pylint: disable=too-many-arguments, too-many-branches
 def create_region(
     boundingBox=None,
@@ -146,11 +242,6 @@ def create_region(
 
     return region
 
-
-def get_serialized_dom(page, cookies, **kwargs):
-    dom_snapshot = page.evaluate(f"PercyDOM.serialize({json.dumps(kwargs)})")
-    dom_snapshot["cookies"] = cookies
-    return dom_snapshot
 
 
 def calculate_default_height(page, current_height, **kwargs):
@@ -209,7 +300,7 @@ def change_window_dimension_and_wait(page, width, height, resize_count):
         log(f"Timed out waiting for window resize event for width {width}", "debug")
 
 
-def capture_responsive_dom(page, cookies, **kwargs):
+def capture_responsive_dom(page, cookies, percy_dom_script=None, **kwargs):
     viewport = page.viewport_size or page.evaluate(
         "() => ({ width: window.innerWidth, height: window.innerHeight })"
     )
@@ -237,6 +328,8 @@ def capture_responsive_dom(page, cookies, **kwargs):
         if PERCY_RESPONSIVE_CAPTURE_RELOAD_PAGE:
             page.reload()
             page.evaluate(fetch_percy_dom())
+            page.evaluate("PercyDOM.waitForResize()")
+            resize_count = 0
 
         if RESPONSIVE_CAPTURE_SLEEP_TIME:
             try:
@@ -245,7 +338,7 @@ def capture_responsive_dom(page, cookies, **kwargs):
                 sleep_time = 0
             if sleep_time > 0:
                 sleep(sleep_time)
-        dom_snapshot = get_serialized_dom(page, cookies, **kwargs)
+        dom_snapshot = get_serialized_dom(page, cookies, percy_dom_script, **kwargs)
         dom_snapshot["width"] = width
         dom_snapshots.append(dom_snapshot)
 
@@ -287,14 +380,15 @@ def percy_snapshot(page, name, **kwargs):
 
     try:
         # Inject the DOM serialization script
-        page.evaluate(fetch_percy_dom())
+        percy_dom_script = fetch_percy_dom()
+        page.evaluate(percy_dom_script)
         cookies = page.context.cookies()
 
         # Serialize and capture the DOM
         if is_responsive_snapshot_capture(data["config"], **kwargs):
-            dom_snapshot = capture_responsive_dom(page, cookies, **kwargs)
+            dom_snapshot = capture_responsive_dom(page, cookies, percy_dom_script, **kwargs)
         else:
-            dom_snapshot = get_serialized_dom(page, cookies, **kwargs)
+            dom_snapshot = get_serialized_dom(page, cookies, percy_dom_script, **kwargs)
 
         # Post the DOM to the snapshot endpoint with snapshot options and other info
         response = requests.post(
