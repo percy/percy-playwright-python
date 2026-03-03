@@ -19,7 +19,7 @@ from percy.screenshot import (
     create_region,
     is_responsive_snapshot_capture,
     calculate_default_height,
-    get_widths_for_multi_dom,
+    get_responsive_widths,
     capture_responsive_dom,
     change_window_dimension_and_wait,
     log
@@ -418,8 +418,6 @@ class TestPercyFunctions(unittest.TestCase):
         mock_is_percy_enabled.return_value = {
             "session_type": "web",
             "config": {"snapshot": {"responsiveSnapshotCapture": True}},
-            "widths": {"config": [375, 1280]},
-            "device_details": [{"width": 375, "height": 667}],
         }
         mock_fetch_percy_dom.return_value = "some_js_code"
         mock_capture_responsive_dom.return_value = [
@@ -440,8 +438,6 @@ class TestPercyFunctions(unittest.TestCase):
 
         mock_capture_responsive_dom.assert_called_once_with(
             page,
-            {"config": [375, 1280]},
-            [{"width": 375, "height": 667}],
             [{"name": "foo", "value": "bar"}],
         )
         posted = mock_post.call_args.kwargs["json"]
@@ -455,8 +451,6 @@ class TestPercyFunctions(unittest.TestCase):
         mock_is_percy_enabled.return_value = {
             "session_type": "automate",
             "config": {},
-            "widths": {},
-            "device_details": [],
         }
         page = MagicMock()
 
@@ -513,8 +507,6 @@ class TestPercyFunctions(unittest.TestCase):
         mock_is_percy_enabled.return_value = {
             "session_type": "web",
             "config": {},
-            "widths": {},
-            "device_details": [],
         }
         page = MagicMock()
 
@@ -533,8 +525,6 @@ class TestPercyFunctions(unittest.TestCase):
         mock_is_percy_enabled.return_value = {
             "session_type": "automate",
             "config": {},
-            "widths": {},
-            "device_details": [],
         }
         page = MagicMock()
 
@@ -634,7 +624,7 @@ class TestScreenshotEdgeCases(unittest.TestCase):
         with patch.object(local, "PERCY_RESPONSIVE_CAPTURE_RELOAD_PAGE", None), patch.object(
             local, "RESPONSIVE_CAPTURE_SLEEP_TIME", None
         ), patch(
-            "percy.screenshot.get_widths_for_multi_dom"
+            "percy.screenshot.get_responsive_widths"
         ) as mock_widths, patch(
             "percy.screenshot.get_serialized_dom"
         ) as mock_serialized, patch(
@@ -643,9 +633,7 @@ class TestScreenshotEdgeCases(unittest.TestCase):
             mock_widths.return_value = [{"width": 800, "height": 600}]
             mock_serialized.return_value = {"html": "<html></html>"}
 
-            capture_responsive_dom(
-                page, {"config": [800]}, [], [{"name": "foo", "value": "bar"}]
-            )
+            capture_responsive_dom(page, [{"name": "foo", "value": "bar"}])
 
         page.reload.assert_not_called()
         page.evaluate.assert_any_call("PercyDOM.waitForResize()")
@@ -664,7 +652,7 @@ class TestScreenshotEdgeCases(unittest.TestCase):
         with patch.object(local, "PERCY_RESPONSIVE_CAPTURE_RELOAD_PAGE", None), patch.object(
             local, "RESPONSIVE_CAPTURE_SLEEP_TIME", None
         ), patch(
-            "percy.screenshot.get_widths_for_multi_dom"
+            "percy.screenshot.get_responsive_widths"
         ) as mock_widths, patch(
             "percy.screenshot.get_serialized_dom"
         ) as mock_serialized, patch(
@@ -673,9 +661,7 @@ class TestScreenshotEdgeCases(unittest.TestCase):
             mock_widths.return_value = [{"width": 1024, "height": 768}]
             mock_serialized.return_value = {"html": "<html></html>"}
 
-            capture_responsive_dom(
-                page, {"config": [1024]}, [], [{"name": "foo", "value": "bar"}]
-            )
+            capture_responsive_dom(page, [{"name": "foo", "value": "bar"}])
 
         page.evaluate.assert_any_call(
             "() => ({ width: window.innerWidth, height: window.innerHeight })"
@@ -691,8 +677,6 @@ class TestScreenshotEdgeCases(unittest.TestCase):
         mock_is_percy_enabled.return_value = {
             "session_type": "web",
             "config": {},
-            "widths": {},
-            "device_details": [],
         }
         mock_fetch_percy_dom.return_value = "some_js_code"
         page = MagicMock()
@@ -720,8 +704,6 @@ class TestScreenshotEdgeCases(unittest.TestCase):
         mock_is_percy_enabled.return_value = {
             "session_type": "web",
             "config": {},
-            "widths": {},
-            "device_details": [],
         }
         mock_fetch_percy_dom.return_value = "some_js_code"
         page = MagicMock()
@@ -744,8 +726,6 @@ class TestScreenshotEdgeCases(unittest.TestCase):
         mock_is_percy_enabled.return_value = {
             "session_type": "automate",
             "config": {},
-            "widths": {},
-            "device_details": [],
         }
         page = MagicMock()
         page._impl_obj._guid = "page@abc"
@@ -772,8 +752,6 @@ class TestScreenshotEdgeCases(unittest.TestCase):
         mock_is_percy_enabled.return_value = {
             "session_type": "automate",
             "config": {},
-            "widths": {},
-            "device_details": [],
         }
         page = MagicMock()
         page._impl_obj._guid = "page@abc"
@@ -880,10 +858,17 @@ class TestResponsiveHelpers(unittest.TestCase):
             with self.assertRaises(SystemExit):
                 calculate_default_height(page, 321)
 
-    def test_get_widths_for_multi_dom(self):
-        eligible_widths = {"mobile": [375], "config": [1280]}
-        device_details = [{"width": 375, "height": 667}]
-        widths = get_widths_for_multi_dom(eligible_widths, device_details, 900)
+    @patch("requests.get")
+    def test_get_responsive_widths(self, mock_get):
+        mock_get.return_value.status_code = 200
+        mock_get.return_value.json.return_value = {
+            "widths": [
+                {"width": 375, "height": 667},
+                {"width": 1280, "height": 900},
+            ]
+        }
+
+        widths = get_responsive_widths([375, 1280])
 
         self.assertEqual(
             widths,
@@ -892,87 +877,67 @@ class TestResponsiveHelpers(unittest.TestCase):
                 {"width": 1280, "height": 900},
             ],
         )
-
-    def test_get_widths_for_multi_dom_user_width_override(self):
-        eligible_widths = {"mobile": [375], "config": [1280]}
-        device_details = []
-        widths = get_widths_for_multi_dom(
-            eligible_widths, device_details, 900, width=1024
+        mock_get.assert_called_once_with(
+            "http://localhost:5338/percy/widths-config?widths=375,1280",
+            timeout=30,
         )
+
+    @patch("requests.get")
+    def test_get_responsive_widths_missing_widths(self, mock_get):
+        mock_get.return_value.status_code = 200
+        mock_get.return_value.json.return_value = {"widths": "not-a-list"}
+
+        with self.assertRaises(Exception) as context:
+            get_responsive_widths([800])
+
+        self.assertEqual(
+            str(context.exception),
+            "Update Percy CLI to the latest version to use responsiveSnapshotCapture",
+        )
+
+    @patch("requests.get")
+    def test_get_responsive_widths_with_none(self, mock_get):
+        mock_get.return_value.status_code = 200
+        mock_get.return_value.json.return_value = {
+            "widths": [
+                {"width": 375, "height": 667},
+            ]
+        }
+
+        widths = get_responsive_widths(None)
 
         self.assertEqual(
             widths,
             [
-                {"width": 375, "height": 900},
-                {"width": 1024, "height": 900},
+                {"width": 375, "height": 667},
             ],
         )
-
-    def test_get_widths_for_multi_dom_with_widths_list(self):
-        """Test get_widths_for_multi_dom with user-provided widths list."""
-        eligible_widths = {"mobile": [375], "config": [1280]}
-        device_details = [{"width": 375, "height": 667}]
-        # Pass widths as a list (not using width parameter)
-        widths = get_widths_for_multi_dom(
-            eligible_widths, device_details, 900, widths=[800, 1024]
+        mock_get.assert_called_once_with(
+            "http://localhost:5338/percy/widths-config",
+            timeout=30,
         )
 
-        # Should include mobile width with device height, and user widths
-        self.assertEqual(len(widths), 3)
-        self.assertIn({"width": 375, "height": 667}, widths)
-        self.assertIn({"width": 800, "height": 900}, widths)
-        self.assertIn({"width": 1024, "height": 900}, widths)
+    @patch("requests.get")
+    def test_get_responsive_widths_with_empty_list(self, mock_get):
+        mock_get.return_value.status_code = 200
+        mock_get.return_value.json.return_value = {
+            "widths": [
+                {"width": 375, "height": 667},
+            ]
+        }
 
-    def test_get_widths_for_multi_dom_mobile_without_device_info(self):
-        """Test get_widths_for_multi_dom when device_info is None for mobile width."""
-        eligible_widths = {"mobile": [375, 768], "config": [1280]}
-        # Only provide device details for 375, not for 768
-        device_details = [{"width": 375, "height": 667}]
-        widths = get_widths_for_multi_dom(eligible_widths, device_details, 900)
+        widths = get_responsive_widths([])
 
-        # 768 should use default_height since no device_info
-        expected = [
-            {"width": 375, "height": 667},
-            {"width": 768, "height": 900},  # Uses default_height
-            {"width": 1280, "height": 900},
-        ]
-        self.assertEqual(widths, expected)
-
-    def test_get_widths_for_multi_dom_duplicate_widths(self):
-        """Test get_widths_for_multi_dom when same width appears in mobile and config."""
-        eligible_widths = {"mobile": [375, 1280], "config": [1280, 1920]}
-        device_details = [{"width": 375, "height": 667}, {"width": 1280, "height": 800}]
-        widths = get_widths_for_multi_dom(eligible_widths, device_details, 900)
-
-        # 1280 should only appear once (from mobile with device height)
-        self.assertEqual(len(widths), 3)
-        self.assertIn({"width": 375, "height": 667}, widths)
-        self.assertIn({"width": 1280, "height": 800}, widths)  # From mobile with device info
-        self.assertIn({"width": 1920, "height": 900}, widths)
-
-    def test_get_widths_for_multi_dom_no_mobile_widths(self):
-        """Test get_widths_for_multi_dom with no mobile widths."""
-        eligible_widths = {"mobile": [], "config": [1280, 1920]}
-        device_details = []
-        widths = get_widths_for_multi_dom(eligible_widths, device_details, 900)
-
-        # Should only have config widths
-        self.assertEqual(len(widths), 2)
-        self.assertIn({"width": 1280, "height": 900}, widths)
-        self.assertIn({"width": 1920, "height": 900}, widths)
-
-    def test_get_widths_for_multi_dom_mobile_width_already_in_map(self):
-        """Test when a mobile width appears multiple times (edge case for branch coverage)."""
-        # This is a contrived test to hit the branch where width is already in width_height_map
-        # during the mobile widths loop
-        eligible_widths = {"mobile": [375, 375], "config": [1280]}  # Duplicate 375
-        device_details = [{"width": 375, "height": 667}]
-        widths = get_widths_for_multi_dom(eligible_widths, device_details, 900)
-
-        # Should only have 375 once and 1280
-        self.assertEqual(len(widths), 2)
-        self.assertIn({"width": 375, "height": 667}, widths)
-        self.assertIn({"width": 1280, "height": 900}, widths)
+        self.assertEqual(
+            widths,
+            [
+                {"width": 375, "height": 667},
+            ],
+        )
+        mock_get.assert_called_once_with(
+            "http://localhost:5338/percy/widths-config",
+            timeout=30,
+        )
 
     def test_capture_responsive_dom_calls_resize_reload_sleep(self):
         page = MagicMock()
@@ -983,7 +948,7 @@ class TestResponsiveHelpers(unittest.TestCase):
         with patch.object(local, "PERCY_RESPONSIVE_CAPTURE_RELOAD_PAGE", "1"), patch.object(
             local, "RESPONSIVE_CAPTURE_SLEEP_TIME", "1"
         ), patch(
-            "percy.screenshot.get_widths_for_multi_dom"
+            "percy.screenshot.get_responsive_widths"
         ) as mock_widths, patch(
             "percy.screenshot.get_serialized_dom"
         ) as mock_serialized, patch(
@@ -1003,9 +968,7 @@ class TestResponsiveHelpers(unittest.TestCase):
             ]
             mock_fetch.return_value = "dom-script"
 
-            result = capture_responsive_dom(
-                page, {"config": [800, 1200]}, [], [{"name": "foo", "value": "bar"}]
-            )
+            result = capture_responsive_dom(page, [{"name": "foo", "value": "bar"}])
 
         page.evaluate.assert_any_call("PercyDOM.waitForResize()")
         page.evaluate.assert_any_call("dom-script")
@@ -1031,7 +994,7 @@ class TestResponsiveHelpers(unittest.TestCase):
         with patch.object(local, "PERCY_RESPONSIVE_CAPTURE_RELOAD_PAGE", None), patch.object(
             local, "RESPONSIVE_CAPTURE_SLEEP_TIME", "not-a-number"
         ), patch(
-            "percy.screenshot.get_widths_for_multi_dom"
+            "percy.screenshot.get_responsive_widths"
         ) as mock_widths, patch(
             "percy.screenshot.get_serialized_dom"
         ) as mock_serialized, patch(
@@ -1042,7 +1005,7 @@ class TestResponsiveHelpers(unittest.TestCase):
             mock_widths.return_value = [{"width": 800, "height": 600}]
             mock_serialized.return_value = {"html": "<html></html>"}
 
-            capture_responsive_dom(page, {"config": [800]}, [], [])
+            capture_responsive_dom(page, [])
 
         mock_sleep.assert_not_called()
 
@@ -1054,7 +1017,7 @@ class TestResponsiveHelpers(unittest.TestCase):
         with patch.object(local, "PERCY_RESPONSIVE_CAPTURE_RELOAD_PAGE", None), patch.object(
             local, "RESPONSIVE_CAPTURE_SLEEP_TIME", "0"
         ), patch(
-            "percy.screenshot.get_widths_for_multi_dom"
+            "percy.screenshot.get_responsive_widths"
         ) as mock_widths, patch(
             "percy.screenshot.get_serialized_dom"
         ) as mock_serialized, patch(
@@ -1065,9 +1028,56 @@ class TestResponsiveHelpers(unittest.TestCase):
             mock_widths.return_value = [{"width": 800, "height": 600}]
             mock_serialized.return_value = {"html": "<html></html>"}
 
-            capture_responsive_dom(page, {"config": [800]}, [], [])
+            capture_responsive_dom(page, [])
 
         mock_sleep.assert_not_called()
+
+    def test_capture_responsive_dom_skips_resize_for_same_width(self):
+        """Test that resize is skipped when consecutive widths are the same."""
+        page = MagicMock()
+        page.viewport_size = {"width": 800, "height": 600}
+        page.evaluate = MagicMock()
+
+        with patch.object(local, "PERCY_RESPONSIVE_CAPTURE_RELOAD_PAGE", None), patch.object(
+            local, "RESPONSIVE_CAPTURE_SLEEP_TIME", None
+        ), patch(
+            "percy.screenshot.get_responsive_widths"
+        ) as mock_widths, patch(
+            "percy.screenshot.get_serialized_dom"
+        ) as mock_serialized, patch(
+            "percy.screenshot.change_window_dimension_and_wait"
+        ) as mock_resize:
+            # Test with duplicate widths: 800 (same as viewport), 1200, 1200 (duplicate), 1400
+            mock_widths.return_value = [
+                {"width": 800, "height": 600},
+                {"width": 1200, "height": 700},
+                {"width": 1200, "height": 700},  # Duplicate - should not trigger resize
+                {"width": 1400, "height": 800},
+            ]
+            mock_serialized.side_effect = [
+                {"html": "<html></html>"},
+                {"html": "<html></html>"},
+                {"html": "<html></html>"},
+                {"html": "<html></html>"},
+            ]
+
+            result = capture_responsive_dom(page, [])
+
+        # Verify resize is called only when width changes:
+        # 1. First width (800) matches viewport - no resize
+        # 2. Second width (1200) differs - resize to 1200
+        # 3. Third width (1200) same as previous - no resize
+        # 4. Fourth width (1400) differs - resize to 1400
+        # 5. Final restore to viewport (800) - resize to 800
+        mock_resize.assert_has_calls(
+            [
+                call(page, 1200, 700, 1),  # First change from 800 to 1200
+                call(page, 1400, 800, 2),  # Second change from 1200 to 1400
+                call(page, 800, 600, 3),   # Final restore
+            ]
+        )
+        self.assertEqual(mock_resize.call_count, 3)
+        self.assertEqual(len(result), 4)  # All 4 widths should have snapshots
 
     def test_create_region_with_minimal_params(self):
         result = create_region(
