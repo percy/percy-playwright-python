@@ -494,7 +494,7 @@ class TestPercyFunctions(unittest.TestCase):
         )
 
     def test_get_serialized_dom_logs_when_frame_processing_fails(self):
-        class BadUrl:
+        class BadUrl:  # pylint: disable=too-few-public-methods
             def __str__(self):
                 raise Exception("boom")
 
