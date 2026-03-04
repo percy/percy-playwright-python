@@ -122,11 +122,11 @@ def process_frame(page, frame, options, percy_dom_script):
             """(fUrl) => {
                 const iframes = Array.from(document.querySelectorAll('iframe'));
                 const matchingIframe = iframes.find(iframe => iframe.src.startsWith(fUrl));
-                if (matchingIframe) {{
-                    return {{
+                if (matchingIframe) {
+                    return {
                         percyElementId: matchingIframe.getAttribute('data-percy-element-id')
-                    }};
-                }}
+                    };
+                }
             }""",
             frame_url
         )
