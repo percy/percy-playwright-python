@@ -135,6 +135,14 @@ def process_frame(page, frame, options, percy_dom_script):
             frame_url
         )
 
+        if not iframe_data or not iframe_data.get("percyElementId"):
+            log(
+                f"Skipping cross-origin frame {frame_url}: "
+                "no matching iframe element with percyElementId found on main page",
+                "debug"
+            )
+            return None
+
         return {
             "iframeData": iframe_data,
             "iframeSnapshot": iframe_snapshot,
