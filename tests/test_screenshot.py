@@ -471,6 +471,42 @@ class TestPercyFunctions(unittest.TestCase):
         self.assertIsNone(result)
         mock_log.assert_called_once()
 
+    def test_process_frame_returns_none_when_iframe_data_missing(self):
+        page = MagicMock()
+        page.evaluate.return_value = None  # iframe element not found on main page
+
+        frame = MagicMock()
+        frame.url = "http://cross-origin.example/frame"
+        frame.evaluate.side_effect = [None, {"html": "<iframe></iframe>"}]
+
+        with patch("percy.screenshot.log") as mock_log:
+            result = process_frame(page, frame, {}, "percy-dom-script")
+
+        self.assertIsNone(result)
+        mock_log.assert_called_once_with(
+            "Skipping cross-origin frame http://cross-origin.example/frame: "
+            "no matching iframe element with percyElementId found on main page",
+            "debug"
+        )
+
+    def test_process_frame_returns_none_when_percy_element_id_missing(self):
+        page = MagicMock()
+        page.evaluate.return_value = {}  # iframe found but lacks percyElementId
+
+        frame = MagicMock()
+        frame.url = "http://cross-origin.example/frame"
+        frame.evaluate.side_effect = [None, {"html": "<iframe></iframe>"}]
+
+        with patch("percy.screenshot.log") as mock_log:
+            result = process_frame(page, frame, {}, "percy-dom-script")
+
+        self.assertIsNone(result)
+        mock_log.assert_called_once_with(
+            "Skipping cross-origin frame http://cross-origin.example/frame: "
+            "no matching iframe element with percyElementId found on main page",
+            "debug"
+        )
+
     def test_get_serialized_dom_skips_empty_cors_results(self):
         page = MagicMock()
         page.url = "http://example.com"
