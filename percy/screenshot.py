@@ -15,12 +15,16 @@ from percy.page_metadata import PageMetaData
 CLIENT_INFO = "percy-playwright-python/" + SDK_VERSION
 ENV_INFO = ["playwright/" + PLAYWRIGHT_VERSION, "python/" + platform.python_version()]
 
+def _get_bool_env(key):
+    """Get boolean value from environment variable."""
+    return os.environ.get(key, "").lower() == "true"
+
 # Maybe get the CLI API address from the environment
 PERCY_CLI_API = os.environ.get("PERCY_CLI_API") or "http://localhost:5338"
 PERCY_DEBUG = os.environ.get("PERCY_LOGLEVEL") == "debug"
 RESPONSIVE_CAPTURE_SLEEP_TIME = os.environ.get("RESPONSIVE_CAPTURE_SLEEP_TIME")
-PERCY_RESPONSIVE_CAPTURE_MIN_HEIGHT = os.environ.get("PERCY_RESPONSIVE_CAPTURE_MIN_HEIGHT")
-PERCY_RESPONSIVE_CAPTURE_RELOAD_PAGE = os.environ.get("PERCY_RESPONSIVE_CAPTURE_RELOAD_PAGE")
+PERCY_RESPONSIVE_CAPTURE_MIN_HEIGHT = _get_bool_env("PERCY_RESPONSIVE_CAPTURE_MIN_HEIGHT")
+PERCY_RESPONSIVE_CAPTURE_RELOAD_PAGE = _get_bool_env("PERCY_RESPONSIVE_CAPTURE_RELOAD_PAGE")
 
 # for logging
 LABEL = "[\u001b[35m" + ("percy:python" if PERCY_DEBUG else "percy") + "\u001b[39m]"
