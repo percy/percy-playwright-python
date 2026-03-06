@@ -1116,7 +1116,7 @@ class TestResponsiveHelpers(unittest.TestCase):
             ]
             mock_fetch.return_value = "dom-script"
 
-            result = capture_responsive_dom(page, [{"name": "foo", "value": "bar"}])
+            result = capture_responsive_dom(page, [{"name": "foo", "value": "bar"}], "dom-script")
 
         page.evaluate.assert_any_call("PercyDOM.waitForResize()")
         page.evaluate.assert_any_call("dom-script")

@@ -339,7 +339,7 @@ def capture_responsive_dom(page, cookies, percy_dom_script=None, **kwargs):
 
         if PERCY_RESPONSIVE_CAPTURE_RELOAD_PAGE:
             page.reload()
-            page.evaluate(fetch_percy_dom())
+            page.evaluate(percy_dom_script)
             page.evaluate("PercyDOM.waitForResize()")
             resize_count = 0
 
