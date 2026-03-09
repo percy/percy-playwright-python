@@ -13,7 +13,7 @@ $(VENV)/$(MARKER): $(VENVDEPS) | $(VENV)
 	$(VENV)/python -m playwright install
 	touch $(VENV)/$(MARKER)
 
-.PHONY: venv lint test coverage test-coverage clean build release
+.PHONY: venv lint test test-coverage clean build release
 
 venv: $(VENV)/$(MARKER)
 
@@ -26,9 +26,7 @@ test: venv
 	$(VENV)/python -m unittest tests.test_page_metadata
 	$(VENV)/python -m unittest tests.test_init
 
-test-coverage: coverage
-
-coverage: venv
+test-coverage: venv
 	$(VENV)/python -m coverage erase
 	npx percy exec --testing -- $(VENV)/python -m coverage run --branch --parallel-mode -m unittest tests.test_screenshot
 	$(VENV)/python -m coverage run --branch --parallel-mode -m unittest tests.test_cache
