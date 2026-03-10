@@ -587,6 +587,7 @@ class TestPercyFunctions(unittest.TestCase):
             page,
             [{"name": "foo", "value": "bar"}],
             "some_js_code",
+            config={"snapshot": {"responsiveSnapshotCapture": True}},
         )
         posted = mock_post.call_args.kwargs["json"]
         self.assertEqual(posted["dom_snapshot"], mock_capture_responsive_dom.return_value)
@@ -972,39 +973,25 @@ class TestResponsiveHelpers(unittest.TestCase):
         self.assertFalse(is_responsive_snapshot_capture(config, responsiveSnapshotCapture=True))
 
     def test_calculate_default_height_env_disabled(self):
-        page = MagicMock()
         with patch.object(local, "PERCY_RESPONSIVE_CAPTURE_MIN_HEIGHT", None):
-            self.assertEqual(calculate_default_height(page, 123), 123)
-            page.evaluate.assert_not_called()
+            self.assertEqual(calculate_default_height(123), 123)
 
     def test_calculate_default_height_env_enabled(self):
-        page = MagicMock()
-        page.evaluate.return_value = 456
         with patch.object(local, "PERCY_RESPONSIVE_CAPTURE_MIN_HEIGHT", "1"):
-            self.assertEqual(calculate_default_height(page, 123, min_height=200), 456)
-            page.evaluate.assert_called_once_with(
-                "(minH) => window.outerHeight - window.innerHeight + minH", 200
-            )
+            self.assertEqual(calculate_default_height(123, min_height=200), 200)
 
     def test_calculate_default_height_env_enabled_handles_error(self):
-        page = MagicMock()
-        page.evaluate.side_effect = PlaywrightError("boom")
         with patch.object(local, "PERCY_RESPONSIVE_CAPTURE_MIN_HEIGHT", "1"):
-            self.assertEqual(calculate_default_height(page, 321), 321)
+            self.assertEqual(calculate_default_height(321), 321)
 
-    def test_calculate_default_height_reraises_keyboard_interrupt(self):
-        page = MagicMock()
-        page.evaluate.side_effect = KeyboardInterrupt()
+    def test_calculate_default_height_uses_config_min_height(self):
+        config = {"snapshot": {"minHeight": 500}}
         with patch.object(local, "PERCY_RESPONSIVE_CAPTURE_MIN_HEIGHT", "1"):
-            with self.assertRaises(KeyboardInterrupt):
-                calculate_default_height(page, 321)
+            self.assertEqual(calculate_default_height(321, config=config), 500)
 
-    def test_calculate_default_height_reraises_system_exit(self):
-        page = MagicMock()
-        page.evaluate.side_effect = SystemExit()
+    def test_calculate_default_height_uses_current_height_as_fallback(self):
         with patch.object(local, "PERCY_RESPONSIVE_CAPTURE_MIN_HEIGHT", "1"):
-            with self.assertRaises(SystemExit):
-                calculate_default_height(page, 321)
+            self.assertEqual(calculate_default_height(321), 321)
 
     @patch("requests.get")
     def test_get_responsive_widths(self, mock_get):

@@ -256,21 +256,14 @@ def create_region(
 
 
 
-def calculate_default_height(page, current_height, **kwargs):
+def calculate_default_height(current_height, config=None, **kwargs):
     """Calculate default height for responsive capture."""
     if not PERCY_RESPONSIVE_CAPTURE_MIN_HEIGHT:
         return current_height
 
-    try:
-        min_height = kwargs.get("min_height") or current_height
-        return page.evaluate(
-            "(minH) => window.outerHeight - window.innerHeight + minH", min_height
-        )
-    except BaseException as exc:
-        # Do not swallow control-flow exceptions that should terminate the program.
-        if isinstance(exc, (KeyboardInterrupt, SystemExit)):
-            raise
-        return current_height
+    config_min_height = (config or {}).get("snapshot", {}).get("minHeight")
+    min_height = kwargs.get("min_height") or config_min_height or current_height
+    return min_height
 
 
 def get_responsive_widths(widths=None):
@@ -298,6 +291,17 @@ def get_responsive_widths(widths=None):
         raise Exception(msg) from e
 
 
+def _responsive_sleep():
+    """Sleep for the configured responsive capture sleep time if positive."""
+    if not RESPONSIVE_CAPTURE_SLEEP_TIME:
+        return
+    try:
+        if (secs := int(RESPONSIVE_CAPTURE_SLEEP_TIME)) > 0:
+            sleep(secs)
+    except (TypeError, ValueError):
+        pass
+
+
 def change_window_dimension_and_wait(page, width, height, resize_count):
     try:
         page.set_viewport_size({"width": width, "height": height})
@@ -312,11 +316,11 @@ def change_window_dimension_and_wait(page, width, height, resize_count):
         log(f"Timed out waiting for window resize event for width {width}", "debug")
 
 
-def capture_responsive_dom(page, cookies, percy_dom_script=None, **kwargs):
+def capture_responsive_dom(page, cookies, percy_dom_script=None, config=None, **kwargs):
     viewport = page.viewport_size or page.evaluate(
         "() => ({ width: window.innerWidth, height: window.innerHeight })"
     )
-    default_height = calculate_default_height(page, viewport["height"], **kwargs)
+    default_height = calculate_default_height(viewport["height"], config=config, **kwargs)
 
     # Get width and height combinations from CLI
     width_heights = get_responsive_widths(kwargs.get("widths", []))
@@ -343,16 +347,10 @@ def capture_responsive_dom(page, cookies, percy_dom_script=None, **kwargs):
             page.evaluate("PercyDOM.waitForResize()")
             resize_count = 0
 
-        if RESPONSIVE_CAPTURE_SLEEP_TIME:
-            try:
-                sleep_time = int(RESPONSIVE_CAPTURE_SLEEP_TIME)
-            except (TypeError, ValueError):
-                sleep_time = 0
-            if sleep_time > 0:
-                sleep(sleep_time)
-        dom_snapshot = get_serialized_dom(page, cookies, percy_dom_script, **kwargs)
-        dom_snapshot["width"] = width
-        dom_snapshots.append(dom_snapshot)
+        _responsive_sleep()
+        snapshot = get_serialized_dom(page, cookies, percy_dom_script, **kwargs)
+        snapshot["width"] = width
+        dom_snapshots.append(snapshot)
 
     change_window_dimension_and_wait(
         page, viewport["width"], viewport["height"], resize_count + 1
@@ -398,7 +396,9 @@ def percy_snapshot(page, name, **kwargs):
 
         # Serialize and capture the DOM
         if is_responsive_snapshot_capture(data["config"], **kwargs):
-            dom_snapshot = capture_responsive_dom(page, cookies, percy_dom_script, **kwargs)
+            dom_snapshot = capture_responsive_dom(
+                page, cookies, percy_dom_script, config=data["config"], **kwargs
+            )
         else:
             dom_snapshot = get_serialized_dom(page, cookies, percy_dom_script, **kwargs)
 
