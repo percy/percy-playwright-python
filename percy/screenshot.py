@@ -2,9 +2,12 @@ import os
 import json
 import platform
 from functools import lru_cache
+from time import sleep
+from urllib.parse import urlparse
 import requests
 
 from playwright._repo_version import version as PLAYWRIGHT_VERSION
+from playwright.sync_api import Error as PlaywrightError, TimeoutError as PlaywrightTimeoutError
 from percy.version import __version__ as SDK_VERSION
 from percy.page_metadata import PageMetaData
 
@@ -12,22 +15,48 @@ from percy.page_metadata import PageMetaData
 CLIENT_INFO = "percy-playwright-python/" + SDK_VERSION
 ENV_INFO = ["playwright/" + PLAYWRIGHT_VERSION, "python/" + platform.python_version()]
 
+def _get_bool_env(key):
+    """Get boolean value from environment variable."""
+    return os.environ.get(key, "").lower() == "true"
+
 # Maybe get the CLI API address from the environment
 PERCY_CLI_API = os.environ.get("PERCY_CLI_API") or "http://localhost:5338"
 PERCY_DEBUG = os.environ.get("PERCY_LOGLEVEL") == "debug"
+RESPONSIVE_CAPTURE_SLEEP_TIME = os.environ.get("RESPONSIVE_CAPTURE_SLEEP_TIME")
+PERCY_RESPONSIVE_CAPTURE_MIN_HEIGHT = _get_bool_env("PERCY_RESPONSIVE_CAPTURE_MIN_HEIGHT")
+PERCY_RESPONSIVE_CAPTURE_RELOAD_PAGE = _get_bool_env("PERCY_RESPONSIVE_CAPTURE_RELOAD_PAGE")
 
 # for logging
 LABEL = "[\u001b[35m" + ("percy:python" if PERCY_DEBUG else "percy") + "\u001b[39m]"
 
+def log(message, lvl="info"):
+    message = f"{LABEL} {message}"
+    try:
+        requests.post(
+            f"{PERCY_CLI_API}/percy/log",
+            json={"message": message, "level": lvl},
+            timeout=5,
+        )
+    except Exception as e:
+        if PERCY_DEBUG:
+            print(f"Sending log to CLI Failed {e}")
+    finally:
+        # Only log if lvl is 'debug' and PERCY_DEBUG is True
+        if lvl != "debug" or PERCY_DEBUG:
+            print(message)
+
 
 # Check if Percy is enabled, caching the result so it is only checked once
 @lru_cache(maxsize=None)
-def is_percy_enabled():
+def _is_percy_enabled():
     try:
         response = requests.get(f"{PERCY_CLI_API}/percy/healthcheck", timeout=30)
         response.raise_for_status()
         data = response.json()
         session_type = data.get("type", None)
+        widths = data.get("widths", {})
+        config = data.get("config", {})
+        device_details = data.get("deviceDetails", [])
 
         if not data["success"]:
             raise Exception(data["error"])
@@ -46,7 +75,12 @@ def is_percy_enabled():
             print(f"{LABEL} Unsupported Percy CLI version, {version}")
             return False
 
-        return session_type
+        return {
+            "session_type": session_type,
+            "config": config,
+            "widths": widths,
+            "device_details": device_details,
+        }
     except Exception as e:
         print(f"{LABEL} Percy is not running, disabling snapshots")
         if PERCY_DEBUG:
@@ -60,6 +94,109 @@ def fetch_percy_dom():
     response = requests.get(f"{PERCY_CLI_API}/percy/dom.js", timeout=30)
     response.raise_for_status()
     return response.text
+
+
+def process_frame(page, frame, options, percy_dom_script):
+    """
+    Processes a single cross-origin frame to capture its snapshot and resources.
+
+    Args:
+        page: The main page object
+        frame: The frame to process
+        options: Snapshot options
+        percy_dom_script: The Percy DOM serialization script
+
+    Returns:
+        Dictionary containing iframe data, snapshot, and URL
+    """
+    frame_url = frame.url
+
+    try:
+        # Inject Percy DOM into the cross-origin frame
+        frame.evaluate(percy_dom_script)
+
+        # enableJavaScript=True prevents the standard iframe serialization logic from running.
+        # This is necessary because we're manually handling cross-origin iframe serialization here.
+        iframe_snapshot = frame.evaluate(
+            f"PercyDOM.serialize({json.dumps({**options, 'enableJavaScript': True})})"
+        )
+
+        # Get the iframe's element data from the main page context
+        iframe_data = page.evaluate(
+            """(fUrl) => {
+                const iframes = Array.from(document.querySelectorAll('iframe'));
+                const matchingIframe = iframes.find(iframe => iframe.src.startsWith(fUrl));
+                if (matchingIframe) {
+                    return {
+                        percyElementId: matchingIframe.getAttribute('data-percy-element-id')
+                    };
+                }
+            }""",
+            frame_url
+        )
+
+        if not iframe_data or not iframe_data.get("percyElementId"):
+            log(
+                f"Skipping cross-origin frame {frame_url}: "
+                "no matching iframe element with percyElementId found on main page",
+                "debug"
+            )
+            return None
+
+        return {
+            "iframeData": iframe_data,
+            "iframeSnapshot": iframe_snapshot,
+            "frameUrl": frame_url
+        }
+    except Exception as e:
+        log(f"Failed to process cross-origin frame {frame_url}: {e}", "debug")
+        return None
+
+
+def get_serialized_dom(page, cookies, percy_dom_script=None, **kwargs):
+    """
+    Serializes the DOM and captures cross-origin iframes.
+
+    Args:
+        page: The page object
+        cookies: Page cookies
+        percy_dom_script: The Percy DOM serialization script
+        **kwargs: Additional options
+
+    Returns:
+        Dictionary containing the DOM snapshot with cross-origin iframe data
+    """
+    dom_snapshot = page.evaluate(f"PercyDOM.serialize({json.dumps(kwargs)})")
+
+    # Process CORS IFrames
+    # Note: Blob URL handling (data-src images, blob background images) is now handled
+    # in the CLI via async DOM serialization. This section only handles cross-origin
+    # iframe serialization and resource merging.
+    try:
+        page_url = urlparse(page.url)
+        frames = page.frames
+
+        # Filter for cross-origin frames (excluding about:blank)
+        cross_origin_frames = [
+            frame for frame in frames
+            if frame.url != "about:blank" and urlparse(frame.url).netloc != page_url.netloc
+        ]
+
+        if cross_origin_frames and percy_dom_script:
+            processed_frames = []
+            for frame in cross_origin_frames:
+                result = process_frame(page, frame, kwargs, percy_dom_script)
+                if result:
+                    processed_frames.append(result)
+
+            if processed_frames:
+                dom_snapshot["corsIframes"] = processed_frames
+    except Exception as e:
+        log(f"Failed to process cross-origin iframes: {e}", "debug")
+
+    dom_snapshot["cookies"] = cookies
+    return dom_snapshot
+
 
 # pylint: disable=too-many-arguments, too-many-branches
 def create_region(
@@ -118,12 +255,131 @@ def create_region(
     return region
 
 
+
+def calculate_default_height(current_height, config=None, **kwargs):
+    """Calculate default height for responsive capture."""
+    if not PERCY_RESPONSIVE_CAPTURE_MIN_HEIGHT:
+        return current_height
+
+    config_min_height = (config or {}).get("snapshot", {}).get("minHeight")
+    min_height = kwargs.get("min_height") or config_min_height or current_height
+    return min_height
+
+
+def get_responsive_widths(widths=None):
+    """Gets computed responsive widths from the Percy server for responsive snapshot capture."""
+    if widths is None:
+        widths = []
+    try:
+        # Ensure widths is a list
+        widths_list = widths if isinstance(widths, list) else []
+        query_param = f"?widths={','.join(map(str, widths_list))}" if widths_list else ""
+        response = requests.get(
+            f"{PERCY_CLI_API}/percy/widths-config{query_param}",
+            timeout=30
+        )
+        response.raise_for_status()
+        data = response.json()
+        widths_data = data.get("widths")
+        if not isinstance(widths_data, list):
+            msg = "Update Percy CLI to the latest version to use responsiveSnapshotCapture"
+            raise Exception(msg)
+        return widths_data
+    except Exception as e:
+        log(f"Failed to get responsive widths: {e}.", "debug")
+        msg = "Update Percy CLI to the latest version to use responsiveSnapshotCapture"
+        raise Exception(msg) from e
+
+
+def _responsive_sleep():
+    """Sleep for the configured responsive capture sleep time if positive."""
+    if not RESPONSIVE_CAPTURE_SLEEP_TIME:
+        return
+    try:
+        if (secs := int(RESPONSIVE_CAPTURE_SLEEP_TIME)) > 0:
+            sleep(secs)
+    except (TypeError, ValueError):
+        pass
+
+
+def change_window_dimension_and_wait(page, width, height, resize_count):
+    try:
+        page.set_viewport_size({"width": width, "height": height})
+    except PlaywrightError as e:
+        log(f"Resizing viewport failed for width {width}: {e}", "debug")
+
+    try:
+        page.wait_for_function(
+            f"window.resizeCount === {resize_count}", timeout=1000
+        )
+    except PlaywrightTimeoutError:
+        log(f"Timed out waiting for window resize event for width {width}", "debug")
+
+
+def capture_responsive_dom(page, cookies, percy_dom_script=None, config=None, **kwargs):
+    viewport = page.viewport_size or page.evaluate(
+        "() => ({ width: window.innerWidth, height: window.innerHeight })"
+    )
+    default_height = calculate_default_height(viewport["height"], config=config, **kwargs)
+
+    # Get width and height combinations from CLI
+    width_heights = get_responsive_widths(kwargs.get("widths", []))
+
+    dom_snapshots = []
+    last_window_width = viewport["width"]
+    resize_count = 0
+    page.evaluate("PercyDOM.waitForResize()")
+
+    for width_height in width_heights:
+        # Apply default height if not provided by CLI
+        height = width_height.get("height") or default_height
+        width = width_height["width"]
+        if last_window_width != width:
+            resize_count += 1
+            change_window_dimension_and_wait(
+                page, width, height, resize_count
+            )
+            last_window_width = width
+
+        if PERCY_RESPONSIVE_CAPTURE_RELOAD_PAGE:
+            page.reload()
+            page.evaluate(percy_dom_script)
+            page.evaluate("PercyDOM.waitForResize()")
+            resize_count = 0
+
+        _responsive_sleep()
+        snapshot = get_serialized_dom(page, cookies, percy_dom_script, **kwargs)
+        snapshot["width"] = width
+        dom_snapshots.append(snapshot)
+
+    change_window_dimension_and_wait(
+        page, viewport["width"], viewport["height"], resize_count + 1
+    )
+    return dom_snapshots
+
+
+def is_responsive_snapshot_capture(config, **kwargs):
+    # Don't run responsive snapshot capture when defer uploads is enabled
+    if "percy" in config and config["percy"].get("deferUploads", False):
+        return False
+
+    return (
+        kwargs.get("responsive_snapshot_capture", False)
+        or kwargs.get("responsiveSnapshotCapture", False)
+        or (
+            "snapshot" in config
+            and config["snapshot"].get("responsiveSnapshotCapture")
+        )
+    )
+
+
 # Take a DOM snapshot and post it to the snapshot endpoint
 def percy_snapshot(page, name, **kwargs):
-    session_type = is_percy_enabled()
-    if session_type is False:
-        return None  # Since session_type can be None for old CLI version
-    if session_type == "automate":
+    data = _is_percy_enabled()
+    if not data:
+        return None
+
+    if data["session_type"] == "automate":
         raise Exception(
             "Invalid function call - "
             "percy_snapshot(). "
@@ -134,14 +390,17 @@ def percy_snapshot(page, name, **kwargs):
 
     try:
         # Inject the DOM serialization script
-        # print(fetch_percy_dom())
-        page.evaluate(fetch_percy_dom())
+        percy_dom_script = fetch_percy_dom()
+        page.evaluate(percy_dom_script)
+        cookies = page.context.cookies()
 
         # Serialize and capture the DOM
-        dom_snapshot_script = f"PercyDOM.serialize({json.dumps(kwargs)})"
-
-        # Return the serialized DOM Snapshot
-        dom_snapshot = page.evaluate(dom_snapshot_script)
+        if is_responsive_snapshot_capture(data["config"], **kwargs):
+            dom_snapshot = capture_responsive_dom(
+                page, cookies, percy_dom_script, config=data["config"], **kwargs
+            )
+        else:
+            dom_snapshot = get_serialized_dom(page, cookies, percy_dom_script, **kwargs)
 
         # Post the DOM to the snapshot endpoint with snapshot options and other info
         response = requests.post(
@@ -161,22 +420,23 @@ def percy_snapshot(page, name, **kwargs):
 
         # Handle errors
         response.raise_for_status()
-        data = response.json()
+        response_data = response.json()
 
-        if not data["success"]:
-            raise Exception(data["error"])
-        return data.get("data", None)
+        if not response_data["success"]:
+            raise Exception(response_data["error"])
+        return response_data.get("data", None)
     except Exception as e:
-        print(f'{LABEL} Could not take DOM snapshot "{name}"')
-        print(f"{LABEL} {e}")
+        log(f'Could not take DOM snapshot "{name}"')
+        log(f"{e}")
         return None
 
 
 def percy_automate_screenshot(page, name, options=None, **kwargs):
-    session_type = is_percy_enabled()
-    if session_type is False:
-        return None  # Since session_type can be None for old CLI version
-    if session_type == "web":
+    data = _is_percy_enabled()
+    if not data:
+        return None
+
+    if data["session_type"] == "web":
         raise Exception(
             "Invalid function call - "
             "percy_screenshot(). Please use percy_snapshot() function for taking screenshot. "
@@ -212,13 +472,13 @@ def percy_automate_screenshot(page, name, options=None, **kwargs):
 
         # Handle errors
         response.raise_for_status()
-        data = response.json()
+        response_data = response.json()
 
-        if not data["success"]:
-            raise Exception(data["error"])
+        if not response_data["success"]:
+            raise Exception(response_data["error"])
 
-        return data.get("data", None)
+        return response_data.get("data", None)
     except Exception as e:
-        print(f'{LABEL} Could not take Screenshot "{name}"')
-        print(f"{LABEL} {e}")
+        log(f'Could not take Screenshot "{name}"')
+        log(f"{e}")
         return None

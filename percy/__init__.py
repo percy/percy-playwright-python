@@ -4,8 +4,8 @@ from percy.screenshot import percy_automate_screenshot
 # import snapshot command
 try:
     from percy.screenshot import percy_snapshot
-except ImportError:
-
+except ImportError:  # pragma: no cover
+    # This is defensive code in case percy_snapshot is not available
     def percy_snapshot(page, *a, **kw):
         raise ModuleNotFoundError(
             "[percy] `percy-playwright-python` package is not installed, "
