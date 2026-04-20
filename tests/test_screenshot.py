@@ -1290,5 +1290,91 @@ class TestResponsiveHelpers(unittest.TestCase):
         self.assertEqual(result, expected_result)
 
 
+class TestClosedShadowDOM(unittest.TestCase):
+    """Tests for expose_closed_shadow_roots and _walk_nodes."""
+
+    def test_walk_nodes_finds_closed_shadow_roots(self):
+        from percy.screenshot import _walk_nodes
+        node = {
+            "backendNodeId": 1,
+            "shadowRoots": [
+                {"backendNodeId": 2, "shadowRootType": "closed", "children": []},
+                {"backendNodeId": 3, "shadowRootType": "open", "children": []}
+            ],
+            "children": []
+        }
+        pairs = []
+        _walk_nodes(node, pairs)
+        self.assertEqual(len(pairs), 1)
+        self.assertEqual(pairs[0]["hostBackendNodeId"], 1)
+        self.assertEqual(pairs[0]["shadowBackendNodeId"], 2)
+
+    def test_walk_nodes_skips_content_document(self):
+        from percy.screenshot import _walk_nodes
+        node = {
+            "backendNodeId": 1,
+            "contentDocument": {"backendNodeId": 2, "children": [
+                {"backendNodeId": 3, "shadowRoots": [
+                    {"backendNodeId": 4, "shadowRootType": "closed", "children": []}
+                ], "children": []}
+            ]},
+            "children": []
+        }
+        pairs = []
+        _walk_nodes(node, pairs)
+        self.assertEqual(len(pairs), 0)
+
+    def test_expose_non_chromium_browser(self):
+        from percy.screenshot import expose_closed_shadow_roots
+        page = MagicMock()
+        page.context.new_cdp_session.side_effect = Exception("Not Chromium")
+        # Should not throw
+        expose_closed_shadow_roots(page)
+
+    def test_expose_no_closed_roots(self):
+        from percy.screenshot import expose_closed_shadow_roots
+        page = MagicMock()
+        cdp = MagicMock()
+        page.context.new_cdp_session.return_value = cdp
+        cdp.send.side_effect = lambda method, params=None: (
+            {"root": {"backendNodeId": 1, "children": []}} if method == "DOM.getDocument" else None
+        )
+        expose_closed_shadow_roots(page)
+        cdp.detach.assert_called_once()
+        page.evaluate.assert_not_called()
+
+    def test_expose_closed_roots_found(self):
+        from percy.screenshot import expose_closed_shadow_roots
+        page = MagicMock()
+        cdp = MagicMock()
+        page.context.new_cdp_session.return_value = cdp
+
+        def cdp_send(method, params=None):
+            if method == "DOM.getDocument":
+                return {"root": {"backendNodeId": 1, "children": [
+                    {"backendNodeId": 10, "shadowRoots": [
+                        {"backendNodeId": 20, "shadowRootType": "closed", "children": []}
+                    ], "children": []}
+                ]}}
+            if method == "DOM.resolveNode":
+                return {"object": {"objectId": f"obj-{params['backendNodeId']}"}}
+            return None
+
+        cdp.send.side_effect = cdp_send
+        expose_closed_shadow_roots(page)
+        page.evaluate.assert_called_once()
+        cdp.detach.assert_called_once()
+
+    def test_expose_cdp_error_non_fatal(self):
+        from percy.screenshot import expose_closed_shadow_roots
+        page = MagicMock()
+        cdp = MagicMock()
+        page.context.new_cdp_session.return_value = cdp
+        cdp.send.side_effect = Exception("CDP failed")
+        # Should not throw
+        expose_closed_shadow_roots(page)
+        cdp.detach.assert_called_once()
+
+
 if __name__ == "__main__":
     unittest.main()

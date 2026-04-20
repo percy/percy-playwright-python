@@ -96,6 +96,71 @@ def fetch_percy_dom():
     return response.text
 
 
+def _walk_nodes(node, closed_pairs):
+    """Walk CDP DOM tree to find closed shadow roots, skipping iframe boundaries."""
+    if "contentDocument" in node:
+        return
+    if "shadowRoots" in node:
+        for sr in node["shadowRoots"]:
+            if sr.get("shadowRootType") == "closed":
+                closed_pairs.append({
+                    "hostBackendNodeId": node["backendNodeId"],
+                    "shadowBackendNodeId": sr["backendNodeId"]
+                })
+            _walk_nodes(sr, closed_pairs)
+    if "children" in node:
+        for child in node["children"]:
+            _walk_nodes(child, closed_pairs)
+
+
+def expose_closed_shadow_roots(page):
+    """Use CDP to discover closed shadow roots and expose them to PercyDOM.serialize().
+    Closed shadow roots are inaccessible from JS (element.shadowRoot === null),
+    but CDP's DOM domain can pierce them."""
+    cdp_session = None
+    try:
+        cdp_session = page.context.new_cdp_session(page)
+    except Exception as err:
+        log(f"CDP session unavailable: {err}", lvl="debug")
+        return
+
+    try:
+        cdp_session.send("DOM.enable")
+        doc_result = cdp_session.send("DOM.getDocument", {"depth": -1, "pierce": True})
+        root = doc_result["root"]
+
+        closed_pairs = []
+        _walk_nodes(root, closed_pairs)
+
+        if not closed_pairs:
+            return
+
+        log(f"Found {len(closed_pairs)} closed shadow root(s), exposing via CDP", lvl="debug")
+
+        page.evaluate("() => { window.__percyClosedShadowRoots = window.__percyClosedShadowRoots || new WeakMap(); }")
+
+        for pair in closed_pairs:
+            host_result = cdp_session.send("DOM.resolveNode", {"backendNodeId": pair["hostBackendNodeId"]})
+            host_object_id = host_result["object"]["objectId"]
+
+            shadow_result = cdp_session.send("DOM.resolveNode", {"backendNodeId": pair["shadowBackendNodeId"]})
+            shadow_object_id = shadow_result["object"]["objectId"]
+
+            cdp_session.send("Runtime.callFunctionOn", {
+                "functionDeclaration": "function(shadowRoot) { window.__percyClosedShadowRoots.set(this, shadowRoot); }",
+                "objectId": host_object_id,
+                "arguments": [{"objectId": shadow_object_id}]
+            })
+    except Exception as err:
+        log(f"Could not expose closed shadow roots via CDP: {err}", lvl="debug")
+    finally:
+        if cdp_session:
+            try:
+                cdp_session.detach()
+            except Exception:
+                pass
+
+
 def process_frame(page, frame, options, percy_dom_script):
     """
     Processes a single cross-origin frame to capture its snapshot and resources.
@@ -392,6 +457,10 @@ def percy_snapshot(page, name, **kwargs):
         # Inject the DOM serialization script
         percy_dom_script = fetch_percy_dom()
         page.evaluate(percy_dom_script)
+
+        # Expose closed shadow roots via CDP before serialization
+        expose_closed_shadow_roots(page)
+
         cookies = page.context.cookies()
 
         # Serialize and capture the DOM
