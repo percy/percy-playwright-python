@@ -120,13 +120,11 @@ def expose_closed_shadow_roots(page):
     cdp_session = None
     try:
         cdp_session = page.context.new_cdp_session(page)
-    except Exception as err:
-        log(f"CDP session unavailable: {err}", lvl="debug")
-        return
 
-    try:
         cdp_session.send("DOM.enable")
-        doc_result = cdp_session.send("DOM.getDocument", {"depth": -1, "pierce": True})
+        doc_result = cdp_session.send(
+            "DOM.getDocument", {"depth": -1, "pierce": True}
+        )
         root = doc_result["root"]
 
         closed_pairs = []
@@ -135,7 +133,11 @@ def expose_closed_shadow_roots(page):
         if not closed_pairs:
             return
 
-        log(f"Found {len(closed_pairs)} closed shadow root(s), exposing via CDP", lvl="debug")
+        log(
+            f"Found {len(closed_pairs)} closed shadow root(s),"
+            " exposing via CDP",
+            lvl="debug"
+        )
 
         weakmap_script = (
             "() => { window.__percyClosedShadowRoots ="
@@ -145,7 +147,8 @@ def expose_closed_shadow_roots(page):
 
         fn_decl = (
             "function(shadowRoot) {"
-            " window.__percyClosedShadowRoots.set(this, shadowRoot); }"
+            " window.__percyClosedShadowRoots"
+            ".set(this, shadowRoot); }"
         )
         for pair in closed_pairs:
             host_id = pair["hostBackendNodeId"]
@@ -166,7 +169,10 @@ def expose_closed_shadow_roots(page):
                 "arguments": [{"objectId": shadow_object_id}]
             })
     except Exception as err:
-        log(f"Could not expose closed shadow roots via CDP: {err}", lvl="debug")
+        log(
+            f"Could not expose closed shadow roots via CDP: {err}",
+            lvl="debug"
+        )
     finally:
         if cdp_session:
             try:
