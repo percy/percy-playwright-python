@@ -153,6 +153,42 @@ def process_frame(page, frame, options, percy_dom_script):
         return None
 
 
+def _wait_for_ready(page, kwargs):
+    """Run readiness checks before serialize. PER-7348.
+
+    Uses page.evaluate (sync Playwright auto-awaits Promises). The embedded
+    JS checks typeof PercyDOM.waitForReady === 'function' so old CLI versions
+    without the method are a graceful no-op.
+
+    Returns readiness diagnostics dict or None, to be attached to the
+    domSnapshot.
+
+    Readiness config precedence: kwargs['readiness'] > cached
+    percy.config.snapshot.readiness > {} (CLI applies balanced default).
+    """
+    readiness_config = kwargs.get('readiness')
+    if readiness_config is None:
+        data = _is_percy_enabled()
+        if isinstance(data, dict):
+            readiness_config = (data.get('config') or {}).get('snapshot', {}).get('readiness', {}) or {}
+        else:
+            readiness_config = {}
+    if isinstance(readiness_config, dict) and readiness_config.get('preset') == 'disabled':
+        return None
+    try:
+        return page.evaluate(
+            "(cfg) => {"
+            "  if (typeof PercyDOM !== 'undefined' && typeof PercyDOM.waitForReady === 'function') {"
+            "    return PercyDOM.waitForReady(cfg);"
+            "  }"
+            "}",
+            readiness_config,
+        )
+    except Exception as e:
+        log(f'waitForReady failed, proceeding to serialize: {e}', 'debug')
+        return None
+
+
 def get_serialized_dom(page, cookies, percy_dom_script=None, **kwargs):
     """
     Serializes the DOM and captures cross-origin iframes.
@@ -166,7 +202,12 @@ def get_serialized_dom(page, cookies, percy_dom_script=None, **kwargs):
     Returns:
         Dictionary containing the DOM snapshot with cross-origin iframe data
     """
+    # Readiness gate before serialize (PER-7348). Graceful on old CLI.
+    readiness_diagnostics = _wait_for_ready(page, kwargs)
     dom_snapshot = page.evaluate(f"PercyDOM.serialize({json.dumps(kwargs)})")
+    # Attach readiness diagnostics so the CLI can log timing and pass/fail
+    if readiness_diagnostics and isinstance(dom_snapshot, dict):
+        dom_snapshot['readiness_diagnostics'] = readiness_diagnostics
 
     # Process CORS IFrames
     # Note: Blob URL handling (data-src images, blob background images) is now handled

@@ -296,6 +296,69 @@ class TestPercySnapshot(unittest.TestCase):
             str(context.exception),
         )
 
+    # --- Readiness gate (PER-7348) ---------------------------------------
+
+    def test_readiness_runs_before_serialize_by_default(self):
+        mock_healthcheck()
+        mock_snapshot()
+
+        with patch.object(self.page, 'evaluate', wraps=self.page.evaluate) as spy:
+            percy_snapshot(self.page, 'readiness-happy-path')
+
+        scripts = [c.args[0] for c in spy.call_args_list if c.args and isinstance(c.args[0], str)]
+        # Readiness evaluate fires first (contains waitForReady)
+        self.assertTrue(any('waitForReady' in s for s in scripts),
+                        f'expected readiness script, got: {scripts}')
+        self.assertTrue(any('PercyDOM.serialize' in s for s in scripts),
+                        f'expected serialize script, got: {scripts}')
+        readiness_idx = next(i for i, s in enumerate(scripts) if 'waitForReady' in s)
+        serialize_idx = next(i for i, s in enumerate(scripts) if 'PercyDOM.serialize' in s)
+        self.assertLess(readiness_idx, serialize_idx)
+
+    def test_readiness_uses_per_snapshot_config(self):
+        mock_healthcheck()
+        mock_snapshot()
+        readiness = {'preset': 'strict', 'stabilityWindowMs': 500}
+
+        with patch.object(self.page, 'evaluate', wraps=self.page.evaluate) as spy:
+            percy_snapshot(self.page, 'readiness-config', readiness=readiness)
+
+        # Find the readiness evaluate call and assert the config arg
+        for call in spy.call_args_list:
+            if call.args and isinstance(call.args[0], str) and 'waitForReady' in call.args[0]:
+                self.assertEqual(call.args[1], readiness)
+                return
+        self.fail('readiness evaluate call not found')
+
+    def test_readiness_skipped_when_preset_disabled(self):
+        mock_healthcheck()
+        mock_snapshot()
+
+        with patch.object(self.page, 'evaluate', wraps=self.page.evaluate) as spy:
+            percy_snapshot(self.page, 'readiness-disabled',
+                           readiness={'preset': 'disabled'})
+
+        scripts = [c.args[0] for c in spy.call_args_list if c.args and isinstance(c.args[0], str)]
+        self.assertFalse(any('waitForReady' in s for s in scripts))
+        self.assertTrue(any('PercyDOM.serialize' in s for s in scripts))
+
+    def test_snapshot_still_posts_when_readiness_raises(self):
+        mock_healthcheck()
+        mock_snapshot()
+
+        orig_evaluate = self.page.evaluate
+
+        def side_effect(script, *args, **kwargs):
+            if isinstance(script, str) and 'waitForReady' in script:
+                raise RuntimeError('readiness boom')
+            return orig_evaluate(script, *args, **kwargs)
+
+        with patch.object(self.page, 'evaluate', side_effect=side_effect):
+            percy_snapshot(self.page, 'readiness-boom')
+
+        paths = [req.path for req in httpretty.latest_requests()]
+        self.assertIn('/percy/snapshot', paths)
+
 
 class TestPercyFunctions(unittest.TestCase):
     @patch("requests.get")
