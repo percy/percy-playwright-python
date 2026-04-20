@@ -24,6 +24,8 @@ from percy.screenshot import (
     change_window_dimension_and_wait,
     get_serialized_dom,
     process_frame,
+    expose_closed_shadow_roots,
+    _walk_nodes,
     log
 )
 import percy.screenshot as local
@@ -1294,7 +1296,7 @@ class TestClosedShadowDOM(unittest.TestCase):
     """Tests for expose_closed_shadow_roots and _walk_nodes."""
 
     def test_walk_nodes_finds_closed_shadow_roots(self):
-        from percy.screenshot import _walk_nodes
+        # uses top-level _walk_nodes import
         node = {
             "backendNodeId": 1,
             "shadowRoots": [
@@ -1310,7 +1312,7 @@ class TestClosedShadowDOM(unittest.TestCase):
         self.assertEqual(pairs[0]["shadowBackendNodeId"], 2)
 
     def test_walk_nodes_skips_content_document(self):
-        from percy.screenshot import _walk_nodes
+        # uses top-level _walk_nodes import
         node = {
             "backendNodeId": 1,
             "contentDocument": {"backendNodeId": 2, "children": [
@@ -1325,14 +1327,14 @@ class TestClosedShadowDOM(unittest.TestCase):
         self.assertEqual(len(pairs), 0)
 
     def test_expose_non_chromium_browser(self):
-        from percy.screenshot import expose_closed_shadow_roots
+        # uses top-level expose_closed_shadow_roots import
         page = MagicMock()
         page.context.new_cdp_session.side_effect = Exception("Not Chromium")
         # Should not throw
         expose_closed_shadow_roots(page)
 
     def test_expose_no_closed_roots(self):
-        from percy.screenshot import expose_closed_shadow_roots
+        # uses top-level expose_closed_shadow_roots import
         page = MagicMock()
         cdp = MagicMock()
         page.context.new_cdp_session.return_value = cdp
@@ -1344,7 +1346,7 @@ class TestClosedShadowDOM(unittest.TestCase):
         page.evaluate.assert_not_called()
 
     def test_expose_closed_roots_found(self):
-        from percy.screenshot import expose_closed_shadow_roots
+        # uses top-level expose_closed_shadow_roots import
         page = MagicMock()
         cdp = MagicMock()
         page.context.new_cdp_session.return_value = cdp
@@ -1366,7 +1368,7 @@ class TestClosedShadowDOM(unittest.TestCase):
         cdp.detach.assert_called_once()
 
     def test_expose_cdp_error_non_fatal(self):
-        from percy.screenshot import expose_closed_shadow_roots
+        # uses top-level expose_closed_shadow_roots import
         page = MagicMock()
         cdp = MagicMock()
         page.context.new_cdp_session.return_value = cdp

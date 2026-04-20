@@ -137,17 +137,31 @@ def expose_closed_shadow_roots(page):
 
         log(f"Found {len(closed_pairs)} closed shadow root(s), exposing via CDP", lvl="debug")
 
-        page.evaluate("() => { window.__percyClosedShadowRoots = window.__percyClosedShadowRoots || new WeakMap(); }")
+        weakmap_script = (
+            "() => { window.__percyClosedShadowRoots ="
+            " window.__percyClosedShadowRoots || new WeakMap(); }"
+        )
+        page.evaluate(weakmap_script)
 
+        fn_decl = (
+            "function(shadowRoot) {"
+            " window.__percyClosedShadowRoots.set(this, shadowRoot); }"
+        )
         for pair in closed_pairs:
-            host_result = cdp_session.send("DOM.resolveNode", {"backendNodeId": pair["hostBackendNodeId"]})
+            host_id = pair["hostBackendNodeId"]
+            host_result = cdp_session.send(
+                "DOM.resolveNode", {"backendNodeId": host_id}
+            )
             host_object_id = host_result["object"]["objectId"]
 
-            shadow_result = cdp_session.send("DOM.resolveNode", {"backendNodeId": pair["shadowBackendNodeId"]})
+            shadow_id = pair["shadowBackendNodeId"]
+            shadow_result = cdp_session.send(
+                "DOM.resolveNode", {"backendNodeId": shadow_id}
+            )
             shadow_object_id = shadow_result["object"]["objectId"]
 
             cdp_session.send("Runtime.callFunctionOn", {
-                "functionDeclaration": "function(shadowRoot) { window.__percyClosedShadowRoots.set(this, shadowRoot); }",
+                "functionDeclaration": fn_decl,
                 "objectId": host_object_id,
                 "arguments": [{"objectId": shadow_object_id}]
             })
