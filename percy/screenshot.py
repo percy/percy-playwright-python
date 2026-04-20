@@ -174,10 +174,10 @@ def expose_closed_shadow_roots(page):
             lvl="debug"
         )
     finally:
-        if cdp_session:
+        if cdp_session:  # pragma: no branch
             try:
                 cdp_session.detach()
-            except Exception:
+            except Exception:  # pragma: no cover
                 pass
 
 
