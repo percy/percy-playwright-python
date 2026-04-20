@@ -1377,6 +1377,20 @@ class TestClosedShadowDOM(unittest.TestCase):
         expose_closed_shadow_roots(page)
         cdp.detach.assert_called_once()
 
+    def test_expose_detach_error_suppressed(self):
+        # covers lines 174-175: except Exception: pass in finally
+        # uses top-level expose_closed_shadow_roots import
+        page = MagicMock()
+        cdp = MagicMock()
+        page.context.new_cdp_session.return_value = cdp
+        cdp.send.side_effect = lambda method, params=None: (
+            {"root": {"backendNodeId": 1, "children": []}}
+            if method == "DOM.getDocument" else None
+        )
+        cdp.detach.side_effect = Exception("Detach failed")
+        # Should not throw even when detach fails
+        expose_closed_shadow_roots(page)
+
 
 if __name__ == "__main__":
     unittest.main()
