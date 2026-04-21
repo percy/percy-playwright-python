@@ -2,3 +2,5 @@ httpretty==1.0.*
 pylint==2.*
 twine
 coverage==7.*
+robotframework>=5.0
+robotframework-browser>=16.0

@@ -1,6 +1,12 @@
 from percy.version import __version__
 from percy.screenshot import percy_automate_screenshot
 
+# Robot Framework support — graceful when robotframework is not installed
+try:
+    from percy.robot_library import PercyLibrary
+except ImportError:
+    pass
+
 # import snapshot command
 try:
     from percy.screenshot import percy_snapshot
