@@ -6,13 +6,15 @@ playwright installed, since percy.screenshot imports it at top level.
 import sys
 from unittest.mock import MagicMock, patch
 
-# Mock playwright before any percy imports
+# Mock playwright before any percy imports  pylint: disable=protected-access
 _mock_playwright = MagicMock()
-_mock_playwright._repo_version.version = "1.50.0"
+_mock_playwright._repo_version.version = "1.50.0"  # pylint: disable=protected-access
 _mock_playwright.sync_api.Error = Exception
 _mock_playwright.sync_api.TimeoutError = TimeoutError
 sys.modules.setdefault("playwright", _mock_playwright)
-sys.modules.setdefault("playwright._repo_version", _mock_playwright._repo_version)
+sys.modules.setdefault(  # pylint: disable=protected-access
+    "playwright._repo_version", _mock_playwright._repo_version
+)
 sys.modules.setdefault("playwright.sync_api", _mock_playwright.sync_api)
 
 from percy.robot_library import (  # noqa: E402 pylint: disable=wrong-import-position
@@ -87,7 +89,10 @@ class TestPercyLibraryKeywords:
     @patch("percy.robot_library._get_screenshot_module")
     def test_create_region(self, mock_get_mod):
         mock_mod = MagicMock()
-        mock_mod.create_region.return_value = {"algorithm": "ignore", "elementSelector": {"elementCSS": ".ad"}}
+        mock_mod.create_region.return_value = {
+            "algorithm": "ignore",
+            "elementSelector": {"elementCSS": ".ad"},
+        }
         mock_get_mod.return_value = mock_mod
 
         lib = PercyLibrary()

@@ -35,9 +35,9 @@ except ImportError:
 _screenshot_module = None
 
 def _get_screenshot_module():
-    global _screenshot_module
+    global _screenshot_module  # pylint: disable=global-statement
     if _screenshot_module is None:
-        from percy import screenshot as _mod
+        from percy import screenshot as _mod  # pylint: disable=import-outside-toplevel
         _screenshot_module = _mod
     return _screenshot_module
 
@@ -125,12 +125,14 @@ if ROBOT_AVAILABLE:
         # --------------------------------------------------------------
 
         @keyword("Percy Snapshot")
-        def percy_snapshot_keyword(self, name, widths=None, min_height=None,
-                                   percy_css=None, scope=None, scope_options=None,
-                                   enable_javascript=None, enable_layout=None,
-                                   disable_shadow_dom=None, labels=None,
-                                   test_case=None, sync=None, regions=None,
-                                   responsive_snapshot_capture=None):
+        def percy_snapshot_keyword(  # pylint: disable=too-many-arguments,too-many-locals
+            self, name, widths=None, min_height=None,
+            percy_css=None, scope=None, scope_options=None,
+            enable_javascript=None, enable_layout=None,
+            disable_shadow_dom=None, labels=None,
+            test_case=None, sync=None, regions=None,
+            responsive_snapshot_capture=None,
+        ):
             """Capture a Percy visual snapshot of the current page.
 
             ``name`` is the snapshot name shown in the Percy dashboard.
@@ -184,14 +186,16 @@ if ROBOT_AVAILABLE:
         # --------------------------------------------------------------
 
         @keyword("Create Percy Region")
-        def create_percy_region_keyword(self, algorithm="ignore",
-                                         bounding_box=None, element_xpath=None,
-                                         element_css=None, padding=None,
-                                         diff_sensitivity=None,
-                                         image_ignore_threshold=None,
-                                         carousels_enabled=None,
-                                         banners_enabled=None, ads_enabled=None,
-                                         diff_ignore_threshold=None):
+        def create_percy_region_keyword(  # pylint: disable=too-many-arguments
+            self, algorithm="ignore",
+            bounding_box=None, element_xpath=None,
+            element_css=None, padding=None,
+            diff_sensitivity=None,
+            image_ignore_threshold=None,
+            carousels_enabled=None,
+            banners_enabled=None, ads_enabled=None,
+            diff_ignore_threshold=None,
+        ):
             """Create a region definition for Percy ignore/consider regions.
 
             ``algorithm`` is one of ``ignore``, ``standard``, or ``intelliignore``.
@@ -215,7 +219,9 @@ if ROBOT_AVAILABLE:
                 padding=int(padding) if padding else None,
                 algorithm=algorithm,
                 diffSensitivity=int(diff_sensitivity) if diff_sensitivity else None,
-                imageIgnoreThreshold=float(image_ignore_threshold) if image_ignore_threshold else None,
+                imageIgnoreThreshold=(
+                    float(image_ignore_threshold) if image_ignore_threshold else None
+                ),
                 carouselsEnabled=_parse_bool(carousels_enabled),
                 bannersEnabled=_parse_bool(banners_enabled),
                 adsEnabled=_parse_bool(ads_enabled),
@@ -233,11 +239,11 @@ if ROBOT_AVAILABLE:
             Returns ``True`` if Percy is available, ``False`` otherwise.
             """
             mod = _get_screenshot_module()
-            return bool(mod._is_percy_enabled())
+            return bool(mod._is_percy_enabled())  # pylint: disable=protected-access
 
 else:
-    class PercyLibrary:  # pylint: disable=function-redefined
-        """Stub — robotframework is not installed."""
+    class PercyLibrary:  # pylint: disable=function-redefined,too-few-public-methods
+        """Stub -- robotframework is not installed."""
         def __init__(self):
             raise ImportError(
                 "robotframework is not installed. "
