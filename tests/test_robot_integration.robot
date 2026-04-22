@@ -21,7 +21,7 @@ Close All Browsers
 # ===================================================================
 
 Basic Snapshot
-    [Documentation]    Simplest snapshot — just a name
+    [Documentation]    Simplest snapshot -- just a name
     Percy Snapshot    Basic - Example.com
 
 Named Snapshot After Navigation

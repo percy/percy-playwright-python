@@ -8,6 +8,7 @@ omit =
     */__pycache__/*
     */site-packages/*
     */.venv/*
+    percy/robot_library.py
 
 [report]
 # Regexes for lines to exclude from consideration
