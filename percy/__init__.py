@@ -3,8 +3,8 @@ from percy.screenshot import percy_automate_screenshot
 
 # Robot Framework support — graceful when robotframework is not installed
 try:
-    from percy.robot_library import PercyLibrary
-except ImportError:
+    from percy.robot_library import PercyLibrary  # pragma: no cover
+except ImportError:  # pragma: no cover
     pass
 
 # import snapshot command
