@@ -206,10 +206,22 @@ if ROBOT_AVAILABLE:
 
             ``bounding_box`` is a JSON string with x, y, width, height.
 
+            ``padding`` is padding in pixels around the element.
+
             Returns a region dict to pass to ``Percy Snapshot`` via ``regions``.
 
-            Examples:
+            == Usage with Percy Snapshot ==
             | ${region}=    Create Percy Region    algorithm=ignore    element_css=.ad-banner
+            | Percy Snapshot    Homepage    regions=${{json.dumps([${region}])}}
+
+            == Multiple regions ==
+            | ${ignore}=    Create Percy Region    algorithm=ignore    element_css=h1
+            | ${consider}=    Create Percy Region    algorithm=standard    element_css=.content    diff_sensitivity=3
+            | Percy Snapshot    Mixed Regions    regions=${{json.dumps([${ignore}, ${consider}])}}
+
+            == With padding and bounding box ==
+            | ${region}=    Create Percy Region    algorithm=ignore    element_css=.banner    padding=10
+            | ${region}=    Create Percy Region    algorithm=ignore    bounding_box={"x":0,"y":0,"width":200,"height":100}
             """
             mod = _get_screenshot_module()
             return mod.create_region(
