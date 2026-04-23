@@ -215,13 +215,17 @@ if ROBOT_AVAILABLE:
             | Percy Snapshot    Homepage    regions=${{json.dumps([${region}])}}
 
             == Multiple regions ==
-            | ${ignore}=    Create Percy Region    algorithm=ignore    element_css=h1
-            | ${consider}=    Create Percy Region    algorithm=standard    element_css=.content    diff_sensitivity=3
-            | Percy Snapshot    Mixed Regions    regions=${{json.dumps([${ignore}, ${consider}])}}
+            | ${ignore}=    Create Percy Region    element_css=h1
+            | ${consider}=    Create Percy Region
+            |    ...    algorithm=standard    element_css=.content
+            | Percy Snapshot    Mixed
+            |    ...    regions=${{json.dumps([${ignore}, ...])}}
 
             == With padding and bounding box ==
-            | ${region}=    Create Percy Region    algorithm=ignore    element_css=.banner    padding=10
-            | ${region}=    Create Percy Region    algorithm=ignore    bounding_box={"x":0,"y":0,"width":200,"height":100}
+            | ${region}=    Create Percy Region
+            |    ...    element_css=.banner    padding=10
+            | ${region}=    Create Percy Region
+            |    ...    bounding_box={"x":0,"y":0,"width":200}
             """
             mod = _get_screenshot_module()
             return mod.create_region(
