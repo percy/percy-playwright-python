@@ -494,15 +494,19 @@ def percy_snapshot(page, name, **kwargs):
         page.evaluate(percy_dom_script)
         cookies = page.context.cookies()
 
+        # Merge .percy.yml config options with snapshot options (snapshot options take priority)
+        config_options = data["config"].get("snapshot", {})
+        merged_kwargs = {**config_options, **kwargs}
+
         # Serialize and capture the DOM
-        if is_responsive_snapshot_capture(data["config"], **kwargs):
+        if is_responsive_snapshot_capture(data["config"], **merged_kwargs):
             dom_snapshot = capture_responsive_dom(
-                page, cookies, percy_dom_script, config=data["config"], **kwargs
+                page, cookies, percy_dom_script, config=data["config"], **merged_kwargs
             )
         else:
             dom_snapshot = get_serialized_dom(
                 page, cookies, percy_dom_script,
-                percy_config=data.get("config"), **kwargs)
+                percy_config=data.get("config"), **merged_kwargs)
 
         # Strip `readiness` from POST body — SDK-local config that the CLI
         # already has via healthcheck.
