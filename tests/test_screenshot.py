@@ -324,9 +324,11 @@ class TestPercySnapshot(unittest.TestCase):
             percy_snapshot(self.page, 'readiness-config', readiness=readiness)
 
         # Find the readiness evaluate call and assert the config arg
-        for call in spy.call_args_list:
-            if call.args and isinstance(call.args[0], str) and 'waitForReady' in call.args[0]:
-                self.assertEqual(call.args[1], readiness)
+        for spy_call in spy.call_args_list:
+            if (spy_call.args
+                    and isinstance(spy_call.args[0], str)
+                    and 'waitForReady' in spy_call.args[0]):
+                self.assertEqual(spy_call.args[1], readiness)
                 return
         self.fail('readiness evaluate call not found')
 
