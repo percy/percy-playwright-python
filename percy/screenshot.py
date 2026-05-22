@@ -153,27 +153,38 @@ def process_frame(page, frame, options, percy_dom_script):
         return None
 
 
-def _wait_for_ready(page, kwargs):
+def _resolve_readiness_config(percy_config, kwargs):
+    """Shallow-merge global (percy_config.snapshot.readiness) and per-snapshot
+    (kwargs['readiness']) readiness config. Per-snapshot keys win; unspecified
+    keys (e.g. a global preset: disabled kill switch) are inherited.
+
+    Defensive: `(config or {}).get('snapshot') or {}` guards against the CLI
+    returning a None-valued snapshot section."""
+    config = percy_config or {}
+    global_readiness = ((config.get('snapshot') or {}).get('readiness')) or {}
+    per_snapshot = kwargs.get('readiness') or {}
+    if not isinstance(global_readiness, dict):
+        global_readiness = {}
+    if not isinstance(per_snapshot, dict):
+        per_snapshot = {}
+    return {**global_readiness, **per_snapshot}
+
+
+def _wait_for_ready(page, percy_config, kwargs):
     """Run readiness checks before serialize. PER-7348.
 
     Uses page.evaluate (sync Playwright auto-awaits Promises). The embedded
     JS checks typeof PercyDOM.waitForReady === 'function' so old CLI versions
     without the method are a graceful no-op.
 
-    Returns readiness diagnostics dict or None, to be attached to the
-    domSnapshot.
-
-    Readiness config precedence: kwargs['readiness'] > cached
-    percy.config.snapshot.readiness > {} (CLI applies balanced default).
+    Returns readiness diagnostics dict (or None) to be attached to the
+    domSnapshot. Callers pass `percy_config` explicitly from the
+    `_is_percy_enabled()` payload they already have in scope — we don't
+    re-call the cached lookup here, both for clarity and to avoid surprise
+    dependencies on the cache.
     """
-    readiness_config = kwargs.get('readiness')
-    if readiness_config is None:
-        data = _is_percy_enabled()
-        if isinstance(data, dict):
-            readiness_config = (data.get('config') or {}).get('snapshot', {}).get('readiness', {}) or {}
-        else:
-            readiness_config = {}
-    if isinstance(readiness_config, dict) and readiness_config.get('preset') == 'disabled':
+    readiness_config = _resolve_readiness_config(percy_config, kwargs)
+    if readiness_config.get('preset') == 'disabled':
         return None
     try:
         return page.evaluate(
@@ -189,24 +200,38 @@ def _wait_for_ready(page, kwargs):
         return None
 
 
-def get_serialized_dom(page, cookies, percy_dom_script=None, **kwargs):
+def get_serialized_dom(page, cookies, percy_dom_script=None, *,
+                       percy_config=None, skip_readiness=False,
+                       readiness_diagnostics=None, **kwargs):
     """
     Serializes the DOM and captures cross-origin iframes.
 
     Args:
         page: The page object
         cookies: Page cookies
+        percy_config: CLI healthcheck config (used for readiness merge)
         percy_dom_script: The Percy DOM serialization script
+        skip_readiness: Set True when the caller has already run readiness
+            once (e.g. responsive capture running it before the width loop)
+            to avoid paying the cost per width.
+        readiness_diagnostics: Diagnostics from the caller's earlier
+            readiness run, used when skip_readiness=True.
         **kwargs: Additional options
 
     Returns:
         Dictionary containing the DOM snapshot with cross-origin iframe data
     """
     # Readiness gate before serialize (PER-7348). Graceful on old CLI.
-    readiness_diagnostics = _wait_for_ready(page, kwargs)
-    dom_snapshot = page.evaluate(f"PercyDOM.serialize({json.dumps(kwargs)})")
-    # Attach readiness diagnostics so the CLI can log timing and pass/fail
-    if readiness_diagnostics and isinstance(dom_snapshot, dict):
+    if not skip_readiness:
+        readiness_diagnostics = _wait_for_ready(page, percy_config, kwargs)
+    # Strip `readiness` from forwarded serialize args — it's consumed by
+    # _wait_for_ready upstream, not a PercyDOM.serialize argument.
+    serialize_kwargs = {k: v for k, v in kwargs.items() if k != 'readiness'}
+    dom_snapshot = page.evaluate(f"PercyDOM.serialize({json.dumps(serialize_kwargs)})")
+    # Attach readiness diagnostics so the CLI can log timing and pass/fail.
+    # `is not None` preserves legitimate falsy returns like {} ("gate ran,
+    # no notable diagnostics").
+    if readiness_diagnostics is not None and isinstance(dom_snapshot, dict):
         dom_snapshot['readiness_diagnostics'] = readiness_diagnostics
 
     # Process CORS IFrames
@@ -370,6 +395,9 @@ def capture_responsive_dom(page, cookies, percy_dom_script=None, config=None, **
     last_window_width = viewport["width"]
     resize_count = 0
     page.evaluate("PercyDOM.waitForResize()")
+    # Run readiness ONCE before the per-width loop. Running it per width can
+    # cost up to N*timeoutMs of sequential waits — almost never the intent.
+    responsive_readiness_diagnostics = _wait_for_ready(page, config, kwargs)
 
     for width_height in width_heights:
         # Apply default height if not provided by CLI
@@ -389,7 +417,12 @@ def capture_responsive_dom(page, cookies, percy_dom_script=None, config=None, **
             resize_count = 0
 
         _responsive_sleep()
-        snapshot = get_serialized_dom(page, cookies, percy_dom_script, **kwargs)
+        snapshot = get_serialized_dom(
+            page, cookies, percy_dom_script,
+            percy_config=config,
+            skip_readiness=True,
+            readiness_diagnostics=responsive_readiness_diagnostics,
+            **kwargs)
         snapshot["width"] = width
         dom_snapshots.append(snapshot)
 
@@ -441,13 +474,18 @@ def percy_snapshot(page, name, **kwargs):
                 page, cookies, percy_dom_script, config=data["config"], **kwargs
             )
         else:
-            dom_snapshot = get_serialized_dom(page, cookies, percy_dom_script, **kwargs)
+            dom_snapshot = get_serialized_dom(
+                page, cookies, percy_dom_script,
+                percy_config=data.get("config"), **kwargs)
 
+        # Strip `readiness` from POST body — SDK-local config that the CLI
+        # already has via healthcheck.
+        post_kwargs = {k: v for k, v in kwargs.items() if k != "readiness"}
         # Post the DOM to the snapshot endpoint with snapshot options and other info
         response = requests.post(
             f"{PERCY_CLI_API}/percy/snapshot",
             json={
-                **kwargs,
+                **post_kwargs,
                 **{
                     "client_info": CLIENT_INFO,
                     "environment_info": ENV_INFO,
