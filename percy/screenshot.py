@@ -189,7 +189,8 @@ def _wait_for_ready(page, percy_config, kwargs):
     try:
         return page.evaluate(
             "(cfg) => {"
-            "  if (typeof PercyDOM !== 'undefined' && typeof PercyDOM.waitForReady === 'function') {"
+            "  if (typeof PercyDOM !== 'undefined'"
+            "      && typeof PercyDOM.waitForReady === 'function') {"
             "    return PercyDOM.waitForReady(cfg);"
             "  }"
             "}",
@@ -200,6 +201,7 @@ def _wait_for_ready(page, percy_config, kwargs):
         return None
 
 
+# pylint: disable=too-many-locals
 def get_serialized_dom(page, cookies, percy_dom_script=None, *,
                        percy_config=None, skip_readiness=False,
                        readiness_diagnostics=None, **kwargs):
@@ -382,6 +384,7 @@ def change_window_dimension_and_wait(page, width, height, resize_count):
         log(f"Timed out waiting for window resize event for width {width}", "debug")
 
 
+# pylint: disable=too-many-locals
 def capture_responsive_dom(page, cookies, percy_dom_script=None, config=None, **kwargs):
     viewport = page.viewport_size or page.evaluate(
         "() => ({ width: window.innerWidth, height: window.innerHeight })"
