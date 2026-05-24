@@ -186,15 +186,26 @@ def _wait_for_ready(page, percy_config, kwargs):
     readiness_config = _resolve_readiness_config(percy_config, kwargs)
     if readiness_config.get('preset') == 'disabled':
         return None
+    # Hard JS-side timeout: even though Playwright auto-awaits Promises, a
+    # waitForReady() that never resolves (e.g. CLI's internal observers
+    # keep ticking) would block the whole snapshot suite. Race against a
+    # Promise that resolves after the readiness deadline + 2s buffer.
+    timeout_ms = readiness_config.get('timeoutMs')
+    deadline_ms = int((timeout_ms if isinstance(timeout_ms, (int, float)) and timeout_ms > 0
+                       else 10000) + 2000)
     try:
         return page.evaluate(
-            "(cfg) => {"
-            "  if (typeof PercyDOM !== 'undefined'"
-            "      && typeof PercyDOM.waitForReady === 'function') {"
-            "    return PercyDOM.waitForReady(cfg);"
+            "([cfg, deadlineMs]) => {"
+            "  if (typeof PercyDOM === 'undefined'"
+            "      || typeof PercyDOM.waitForReady !== 'function') {"
+            "    return null;"
             "  }"
+            "  return Promise.race(["
+            "    PercyDOM.waitForReady(cfg),"
+            "    new Promise(resolve => setTimeout(resolve, deadlineMs))"
+            "  ]);"
             "}",
-            readiness_config,
+            [readiness_config, deadline_ms],
         )
     except Exception as e:
         log(f'waitForReady failed, proceeding to serialize: {e}', 'debug')
