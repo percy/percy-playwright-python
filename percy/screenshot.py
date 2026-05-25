@@ -183,14 +183,17 @@ def _wait_for_ready(page, percy_config, kwargs):
     re-call the cached lookup here, both for clarity and to avoid surprise
     dependencies on the cache.
     """
-    readiness_config = _resolve_readiness_config(percy_config, kwargs)
-    # Opt-in only: skip the readiness gate entirely when the merged config
-    # is empty (no per-snapshot readiness kwarg, no global .percy.yml).
-    # Mirrors percy-selenium-python — until the geckodriver/Playwright
-    # hang root-cause is understood, default to no-op; users opt in via
-    # `readiness={...}` or .percy.yml.
-    if not readiness_config:
+    # Opt-in only: skip the readiness gate entirely unless the caller
+    # either passed a `readiness` kwarg or set one in .percy.yml. Mirrors
+    # percy-selenium-python; until the CI-hang root cause is understood,
+    # default to no-op.
+    has_explicit_kwarg = 'readiness' in kwargs
+    has_global_config = bool(
+        (percy_config or {}).get('snapshot', {}).get('readiness')
+        if isinstance(percy_config, dict) else False)
+    if not has_explicit_kwarg and not has_global_config:
         return None
+    readiness_config = _resolve_readiness_config(percy_config, kwargs)
     if readiness_config.get('preset') == 'disabled':
         return None
     # Hard JS-side timeout: even though Playwright auto-awaits Promises, a

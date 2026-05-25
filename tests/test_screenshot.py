@@ -325,12 +325,15 @@ class TestPercySnapshot(unittest.TestCase):
         with patch.object(self.page, 'evaluate', wraps=self.page.evaluate) as spy:
             percy_snapshot(self.page, 'readiness-config', readiness=readiness)
 
-        # Find the readiness evaluate call and assert the config arg
+        # Find the readiness evaluate call and assert the config arg.
+        # The SDK passes [readiness_config, deadline_ms] to page.evaluate
+        # so the in-page Promise.race has access to both values.
         for spy_call in spy.call_args_list:
             if (spy_call.args
                     and isinstance(spy_call.args[0], str)
                     and 'waitForReady' in spy_call.args[0]):
-                self.assertEqual(spy_call.args[1], readiness)
+                self.assertEqual(spy_call.args[1][0], readiness)
+                self.assertIsInstance(spy_call.args[1][1], int)
                 return
         self.fail('readiness evaluate call not found')
 
