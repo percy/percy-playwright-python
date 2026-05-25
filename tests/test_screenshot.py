@@ -296,100 +296,143 @@ class TestPercySnapshot(unittest.TestCase):
             str(context.exception),
         )
 
-    # --- Readiness gate ---------------------------------------
-    # Skipped in CI: even with page.evaluate mocked via side_effect, something
-    # in the readiness call path hangs Playwright under GitHub Actions for
-    # hours. The orchestration is identical to the JS SDKs (which have their
-    # own coverage via @percy/sdk-utils tests), and the opt-in check guards
-    # every non-readiness test from going down this path in production.
-    # Revisit when we have a reliable way to reproduce.
 
-    @unittest.skip("hangs CI; orchestration covered in sdk-utils")
-    def test_readiness_runs_before_serialize_by_default(self):
-        mock_healthcheck()
-        mock_snapshot()
+class TestReadinessGate(unittest.TestCase):
+    """Unit tests for _wait_for_ready / _resolve_readiness_config using a
+    fully-mocked Page. Bypasses real Playwright CDP traffic, so cannot hang
+    on real in-page observers like the integration-style tests did."""
 
-        # Stub page.evaluate via side_effect so we capture script content
-        # without making real CDP calls (real Playwright eval has hung CI
-        # when the in-page Promise relies on observers that never quiesce).
-        orig_evaluate = self.page.evaluate
-        def side_effect(script, *args, **kwargs):
-            if isinstance(script, str) and 'waitForReady' in script:
-                return None
-            return orig_evaluate(script, *args, **kwargs)
-        with patch.object(self.page, 'evaluate', side_effect=side_effect) as spy:
-            percy_snapshot(self.page, 'readiness-happy-path', readiness={})
+    def test_resolve_readiness_config_shallow_merges(self):
+        from percy.screenshot import _resolve_readiness_config
+        merged = _resolve_readiness_config(
+            {'snapshot': {'readiness': {'preset': 'balanced', 'timeoutMs': 8000}}},
+            {'readiness': {'stabilityWindowMs': 500}}
+        )
+        self.assertEqual(merged, {
+            'preset': 'balanced', 'timeoutMs': 8000, 'stabilityWindowMs': 500
+        })
 
-        scripts = [c.args[0] for c in spy.call_args_list if c.args and isinstance(c.args[0], str)]
-        self.assertTrue(any('waitForReady' in s for s in scripts),
-                        f'expected readiness script, got: {scripts}')
-        self.assertTrue(any('PercyDOM.serialize' in s for s in scripts),
-                        f'expected serialize script, got: {scripts}')
-        readiness_idx = next(i for i, s in enumerate(scripts) if 'waitForReady' in s)
-        serialize_idx = next(i for i, s in enumerate(scripts) if 'PercyDOM.serialize' in s)
-        self.assertLess(readiness_idx, serialize_idx)
+    def test_resolve_readiness_config_per_snapshot_wins(self):
+        from percy.screenshot import _resolve_readiness_config
+        merged = _resolve_readiness_config(
+            {'snapshot': {'readiness': {'preset': 'balanced'}}},
+            {'readiness': {'preset': 'strict'}}
+        )
+        self.assertEqual(merged['preset'], 'strict')
 
-    @unittest.skip("hangs CI; orchestration covered in sdk-utils")
-    def test_readiness_uses_per_snapshot_config(self):
-        mock_healthcheck()
-        mock_snapshot()
-        readiness = {'preset': 'strict', 'stabilityWindowMs': 500}
+    def test_resolve_readiness_config_handles_none_snapshot(self):
+        from percy.screenshot import _resolve_readiness_config
+        # Defensive: CLI healthcheck could return snapshot: null
+        merged = _resolve_readiness_config({'snapshot': None}, {})
+        self.assertEqual(merged, {})
 
-        orig_evaluate = self.page.evaluate
-        def side_effect(script, *args, **kwargs):
-            if isinstance(script, str) and 'waitForReady' in script:
-                return None
-            return orig_evaluate(script, *args, **kwargs)
-        with patch.object(self.page, 'evaluate', side_effect=side_effect) as spy:
-            percy_snapshot(self.page, 'readiness-config', readiness=readiness)
+    def test_resolve_readiness_config_handles_non_dict_inputs(self):
+        from percy.screenshot import _resolve_readiness_config
+        merged = _resolve_readiness_config(
+            {'snapshot': {'readiness': 'not-a-dict'}},
+            {'readiness': 12345}
+        )
+        self.assertEqual(merged, {})
 
-        # Find the readiness evaluate call and assert the config arg.
-        # The SDK passes [readiness_config, deadline_ms] to page.evaluate
-        # so the in-page Promise.race has access to both values.
-        for spy_call in spy.call_args_list:
-            if (spy_call.args
-                    and isinstance(spy_call.args[0], str)
-                    and 'waitForReady' in spy_call.args[0]):
-                self.assertEqual(spy_call.args[1][0], readiness)
-                self.assertIsInstance(spy_call.args[1][1], int)
-                return
-        self.fail('readiness evaluate call not found')
+    def test_wait_for_ready_opt_in_skips_when_no_config(self):
+        from percy.screenshot import _wait_for_ready
+        page = MagicMock()
+        result = _wait_for_ready(page, percy_config={}, kwargs={})
+        self.assertIsNone(result)
+        page.evaluate.assert_not_called()
 
-    @unittest.skip("hangs CI; orchestration covered in sdk-utils")
-    def test_readiness_skipped_when_preset_disabled(self):
-        mock_healthcheck()
-        mock_snapshot()
+    def test_wait_for_ready_runs_when_kwargs_opt_in(self):
+        from percy.screenshot import _wait_for_ready
+        diagnostics = {'passed': True, 'preset': 'balanced'}
+        page = MagicMock()
+        page.evaluate.return_value = diagnostics
 
-        orig_evaluate = self.page.evaluate
-        def side_effect(script, *args, **kwargs):
-            if isinstance(script, str) and 'waitForReady' in script:
-                return None
-            return orig_evaluate(script, *args, **kwargs)
-        with patch.object(self.page, 'evaluate', side_effect=side_effect) as spy:
-            percy_snapshot(self.page, 'readiness-disabled',
-                           readiness={'preset': 'disabled'})
+        result = _wait_for_ready(page, percy_config={}, kwargs={'readiness': {}})
 
-        scripts = [c.args[0] for c in spy.call_args_list if c.args and isinstance(c.args[0], str)]
-        self.assertFalse(any('waitForReady' in s for s in scripts))
-        self.assertTrue(any('PercyDOM.serialize' in s for s in scripts))
+        self.assertEqual(result, diagnostics)
+        self.assertEqual(page.evaluate.call_count, 1)
+        script, args = page.evaluate.call_args.args
+        self.assertIn('PercyDOM.waitForReady', script)
+        self.assertEqual(args[0], {})  # readiness config
+        self.assertEqual(args[1], 12000)  # default deadline_ms (10000 + 2000)
 
-    @unittest.skip("hangs CI; orchestration covered in sdk-utils")
-    def test_snapshot_still_posts_when_readiness_raises(self):
-        mock_healthcheck()
-        mock_snapshot()
+    def test_wait_for_ready_runs_when_global_config_opts_in(self):
+        from percy.screenshot import _wait_for_ready
+        page = MagicMock()
+        page.evaluate.return_value = None
+        percy_config = {'snapshot': {'readiness': {'preset': 'balanced'}}}
 
-        orig_evaluate = self.page.evaluate
+        _wait_for_ready(page, percy_config=percy_config, kwargs={})
 
-        def side_effect(script, *args, **kwargs):
-            if isinstance(script, str) and 'waitForReady' in script:
-                raise RuntimeError('readiness boom')
-            return orig_evaluate(script, *args, **kwargs)
+        self.assertEqual(page.evaluate.call_count, 1)
 
-        with patch.object(self.page, 'evaluate', side_effect=side_effect):
-            percy_snapshot(self.page, 'readiness-boom', readiness={})
+    def test_wait_for_ready_skips_disabled_preset(self):
+        from percy.screenshot import _wait_for_ready
+        page = MagicMock()
+        result = _wait_for_ready(
+            page, percy_config={}, kwargs={'readiness': {'preset': 'disabled'}})
+        self.assertIsNone(result)
+        page.evaluate.assert_not_called()
 
-        paths = [req.path for req in httpretty.latest_requests()]
-        self.assertIn('/percy/snapshot', paths)
+    def test_wait_for_ready_inlines_per_snapshot_config_into_args(self):
+        from percy.screenshot import _wait_for_ready
+        page = MagicMock()
+        page.evaluate.return_value = None
+        cfg = {'preset': 'strict', 'stabilityWindowMs': 500}
+
+        _wait_for_ready(page, percy_config={}, kwargs={'readiness': cfg})
+
+        _, eval_args = page.evaluate.call_args.args
+        self.assertEqual(eval_args[0], cfg)
+
+    def test_wait_for_ready_honors_timeoutMs_for_deadline(self):
+        from percy.screenshot import _wait_for_ready
+        page = MagicMock()
+        page.evaluate.return_value = None
+
+        _wait_for_ready(
+            page, percy_config={},
+            kwargs={'readiness': {'timeoutMs': 5000}})
+
+        _, eval_args = page.evaluate.call_args.args
+        # deadline_ms = timeoutMs + 2000
+        self.assertEqual(eval_args[1], 7000)
+
+    def test_wait_for_ready_swallows_exception_and_returns_none(self):
+        from percy.screenshot import _wait_for_ready
+        page = MagicMock()
+        page.evaluate.side_effect = RuntimeError('boom')
+
+        with patch('percy.screenshot.log') as mock_log:
+            result = _wait_for_ready(page, percy_config={}, kwargs={'readiness': {}})
+
+        self.assertIsNone(result)
+        mock_log.assert_called_once()
+        self.assertIn('waitForReady failed', mock_log.call_args.args[0])
+
+    def test_get_serialized_dom_skips_readiness_when_flag_set(self):
+        """skip_readiness=True (responsive capture path) reuses the caller's
+        diagnostics instead of running readiness again per width."""
+        from percy.screenshot import get_serialized_dom
+        page = MagicMock()
+        page.evaluate.return_value = {'html': '<html></html>'}
+        page.url = 'http://localhost:8000/'
+        page.frames = []
+        page.context.return_value.cookies.return_value = []
+
+        result = get_serialized_dom(
+            page, cookies=[], percy_config={},
+            skip_readiness=True,
+            readiness_diagnostics={'cached': True},
+        )
+
+        # Diagnostics from caller propagated, _wait_for_ready never invoked
+        self.assertEqual(result['readiness_diagnostics'], {'cached': True})
+        # Only the serialize call hits evaluate
+        evaluate_scripts = [c.args[0] for c in page.evaluate.call_args_list]
+        self.assertFalse(any(
+            isinstance(s, str) and 'waitForReady' in s for s in evaluate_scripts
+        ))
 
 
 class TestPercyFunctions(unittest.TestCase):

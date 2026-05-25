@@ -153,16 +153,13 @@ def process_frame(page, frame, options, percy_dom_script):
         return None
 
 
-def _resolve_readiness_config(percy_config, kwargs):  # pragma: no cover
+def _resolve_readiness_config(percy_config, kwargs):
     """Shallow-merge global (percy_config.snapshot.readiness) and per-snapshot
     (kwargs['readiness']) readiness config. Per-snapshot keys win; unspecified
     keys (e.g. a global preset: disabled kill switch) are inherited.
 
     Defensive: `(config or {}).get('snapshot') or {}` guards against the CLI
-    returning a None-valued snapshot section.
-
-    Coverage-excluded: exercised only via the readiness gate, whose tests are
-    skipped in CI."""
+    returning a None-valued snapshot section."""
     config = percy_config or {}
     global_readiness = ((config.get('snapshot') or {}).get('readiness')) or {}
     per_snapshot = kwargs.get('readiness') or {}
@@ -196,23 +193,19 @@ def _wait_for_ready(page, percy_config, kwargs):
         if isinstance(percy_config, dict) else False)
     if not has_explicit_kwarg and not has_global_config:
         return None
-    # The remainder of this function is exercised only by readiness tests
-    # (skipped in CI). Production code never reaches here
-    # unless a caller opts in via kwargs or .percy.yml.
-    readiness_config = _resolve_readiness_config(percy_config, kwargs)  # pragma: no cover
-    if readiness_config.get('preset') == 'disabled':  # pragma: no cover
+    readiness_config = _resolve_readiness_config(percy_config, kwargs)
+    if readiness_config.get('preset') == 'disabled':
         return None
     # Hard JS-side timeout: even though Playwright auto-awaits Promises, a
     # waitForReady() that never resolves (e.g. CLI's internal observers
     # keep ticking) would block the whole snapshot suite. Race against a
     # Promise that resolves after the readiness deadline + 2s buffer.
-    timeout_ms = readiness_config.get('timeoutMs')  # pragma: no cover
-    # pragma: no cover
-    deadline_ms = int(  # pragma: no cover
+    timeout_ms = readiness_config.get('timeoutMs')
+    deadline_ms = int(
         (timeout_ms if isinstance(timeout_ms, (int, float)) and timeout_ms > 0 else 10000)
         + 2000
     )
-    try:  # pragma: no cover
+    try:
         return page.evaluate(
             "([cfg, deadlineMs]) => {"
             "  if (typeof PercyDOM === 'undefined'"
@@ -226,7 +219,7 @@ def _wait_for_ready(page, percy_config, kwargs):
             "}",
             [readiness_config, deadline_ms],
         )
-    except Exception as e:  # pragma: no cover
+    except Exception as e:
         log(f'waitForReady failed, proceeding to serialize: {e}', 'debug')
         return None
 
@@ -254,10 +247,7 @@ def get_serialized_dom(page, cookies, percy_dom_script=None, *,
         Dictionary containing the DOM snapshot with cross-origin iframe data
     """
     # Readiness gate before serialize. Graceful on old CLI.
-    # `pragma: no branch` because the skip_readiness=True path is exercised
-    # only by responsive-capture, which is itself tested elsewhere; the
-    # uncovered branch would otherwise drop the suite below 100% coverage.
-    if not skip_readiness:  # pragma: no branch
+    if not skip_readiness:
         readiness_diagnostics = _wait_for_ready(page, percy_config, kwargs)
     # Strip `readiness` from forwarded serialize args — it's consumed by
     # _wait_for_ready upstream, not a PercyDOM.serialize argument.
@@ -265,9 +255,8 @@ def get_serialized_dom(page, cookies, percy_dom_script=None, *,
     dom_snapshot = page.evaluate(f"PercyDOM.serialize({json.dumps(serialize_kwargs)})")
     # Attach readiness diagnostics so the CLI can log timing and pass/fail.
     # `is not None` preserves legitimate falsy returns like {} ("gate ran,
-    # no notable diagnostics"). Coverage-excluded: readiness tests are
-    # skipped in CI.
-    if readiness_diagnostics is not None and isinstance(dom_snapshot, dict):  # pragma: no cover
+    # no notable diagnostics").
+    if readiness_diagnostics is not None and isinstance(dom_snapshot, dict):
         dom_snapshot['readiness_diagnostics'] = readiness_diagnostics
 
     # Process CORS IFrames
