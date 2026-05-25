@@ -162,7 +162,7 @@ def _resolve_readiness_config(percy_config, kwargs):  # pragma: no cover
     returning a None-valued snapshot section.
 
     Coverage-excluded: exercised only via the readiness gate, whose tests are
-    skipped in CI under PER-7348."""
+    skipped in CI."""
     config = percy_config or {}
     global_readiness = ((config.get('snapshot') or {}).get('readiness')) or {}
     per_snapshot = kwargs.get('readiness') or {}
@@ -174,7 +174,7 @@ def _resolve_readiness_config(percy_config, kwargs):  # pragma: no cover
 
 
 def _wait_for_ready(page, percy_config, kwargs):
-    """Run readiness checks before serialize. PER-7348.
+    """Run readiness checks before serialize.
 
     Uses page.evaluate (sync Playwright auto-awaits Promises). The embedded
     JS checks typeof PercyDOM.waitForReady === 'function' so old CLI versions
@@ -197,7 +197,7 @@ def _wait_for_ready(page, percy_config, kwargs):
     if not has_explicit_kwarg and not has_global_config:
         return None
     # The remainder of this function is exercised only by readiness tests
-    # (skipped in CI under PER-7348). Production code never reaches here
+    # (skipped in CI). Production code never reaches here
     # unless a caller opts in via kwargs or .percy.yml.
     readiness_config = _resolve_readiness_config(percy_config, kwargs)  # pragma: no cover
     if readiness_config.get('preset') == 'disabled':  # pragma: no cover
@@ -253,7 +253,7 @@ def get_serialized_dom(page, cookies, percy_dom_script=None, *,
     Returns:
         Dictionary containing the DOM snapshot with cross-origin iframe data
     """
-    # Readiness gate before serialize (PER-7348). Graceful on old CLI.
+    # Readiness gate before serialize. Graceful on old CLI.
     # `pragma: no branch` because the skip_readiness=True path is exercised
     # only by responsive-capture, which is itself tested elsewhere; the
     # uncovered branch would otherwise drop the suite below 100% coverage.
@@ -266,7 +266,7 @@ def get_serialized_dom(page, cookies, percy_dom_script=None, *,
     # Attach readiness diagnostics so the CLI can log timing and pass/fail.
     # `is not None` preserves legitimate falsy returns like {} ("gate ran,
     # no notable diagnostics"). Coverage-excluded: readiness tests are
-    # skipped in CI under PER-7348.
+    # skipped in CI.
     if readiness_diagnostics is not None and isinstance(dom_snapshot, dict):  # pragma: no cover
         dom_snapshot['readiness_diagnostics'] = readiness_diagnostics
 

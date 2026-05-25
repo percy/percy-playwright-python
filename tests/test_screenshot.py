@@ -296,7 +296,7 @@ class TestPercySnapshot(unittest.TestCase):
             str(context.exception),
         )
 
-    # --- Readiness gate (PER-7348) ---------------------------------------
+    # --- Readiness gate ---------------------------------------
     # Skipped in CI: even with page.evaluate mocked via side_effect, something
     # in the readiness call path hangs Playwright under GitHub Actions for
     # hours. The orchestration is identical to the JS SDKs (which have their
@@ -304,7 +304,7 @@ class TestPercySnapshot(unittest.TestCase):
     # every non-readiness test from going down this path in production.
     # Revisit when we have a reliable way to reproduce.
 
-    @unittest.skip("PER-7348: hangs CI; orchestration covered in sdk-utils")
+    @unittest.skip("hangs CI; orchestration covered in sdk-utils")
     def test_readiness_runs_before_serialize_by_default(self):
         mock_healthcheck()
         mock_snapshot()
@@ -329,7 +329,7 @@ class TestPercySnapshot(unittest.TestCase):
         serialize_idx = next(i for i, s in enumerate(scripts) if 'PercyDOM.serialize' in s)
         self.assertLess(readiness_idx, serialize_idx)
 
-    @unittest.skip("PER-7348: hangs CI; orchestration covered in sdk-utils")
+    @unittest.skip("hangs CI; orchestration covered in sdk-utils")
     def test_readiness_uses_per_snapshot_config(self):
         mock_healthcheck()
         mock_snapshot()
@@ -355,7 +355,7 @@ class TestPercySnapshot(unittest.TestCase):
                 return
         self.fail('readiness evaluate call not found')
 
-    @unittest.skip("PER-7348: hangs CI; orchestration covered in sdk-utils")
+    @unittest.skip("hangs CI; orchestration covered in sdk-utils")
     def test_readiness_skipped_when_preset_disabled(self):
         mock_healthcheck()
         mock_snapshot()
@@ -373,7 +373,7 @@ class TestPercySnapshot(unittest.TestCase):
         self.assertFalse(any('waitForReady' in s for s in scripts))
         self.assertTrue(any('PercyDOM.serialize' in s for s in scripts))
 
-    @unittest.skip("PER-7348: hangs CI; orchestration covered in sdk-utils")
+    @unittest.skip("hangs CI; orchestration covered in sdk-utils")
     def test_snapshot_still_posts_when_readiness_raises(self):
         mock_healthcheck()
         mock_snapshot()
