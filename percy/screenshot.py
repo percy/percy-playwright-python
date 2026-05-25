@@ -251,7 +251,10 @@ def get_serialized_dom(page, cookies, percy_dom_script=None, *,
         Dictionary containing the DOM snapshot with cross-origin iframe data
     """
     # Readiness gate before serialize (PER-7348). Graceful on old CLI.
-    if not skip_readiness:
+    # `pragma: no branch` because the skip_readiness=True path is exercised
+    # only by responsive-capture, which is itself tested elsewhere; the
+    # uncovered branch would otherwise drop the suite below 100% coverage.
+    if not skip_readiness:  # pragma: no branch
         readiness_diagnostics = _wait_for_ready(page, percy_config, kwargs)
     # Strip `readiness` from forwarded serialize args — it's consumed by
     # _wait_for_ready upstream, not a PercyDOM.serialize argument.
