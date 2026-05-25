@@ -24,7 +24,9 @@ from percy.screenshot import (
     change_window_dimension_and_wait,
     get_serialized_dom,
     process_frame,
-    log
+    log,
+    _resolve_readiness_config,
+    _wait_for_ready,
 )
 import percy.screenshot as local
 
@@ -303,7 +305,6 @@ class TestReadinessGate(unittest.TestCase):
     on real in-page observers like the integration-style tests did."""
 
     def test_resolve_readiness_config_shallow_merges(self):
-        from percy.screenshot import _resolve_readiness_config
         merged = _resolve_readiness_config(
             {'snapshot': {'readiness': {'preset': 'balanced', 'timeoutMs': 8000}}},
             {'readiness': {'stabilityWindowMs': 500}}
@@ -313,7 +314,6 @@ class TestReadinessGate(unittest.TestCase):
         })
 
     def test_resolve_readiness_config_per_snapshot_wins(self):
-        from percy.screenshot import _resolve_readiness_config
         merged = _resolve_readiness_config(
             {'snapshot': {'readiness': {'preset': 'balanced'}}},
             {'readiness': {'preset': 'strict'}}
@@ -321,13 +321,11 @@ class TestReadinessGate(unittest.TestCase):
         self.assertEqual(merged['preset'], 'strict')
 
     def test_resolve_readiness_config_handles_none_snapshot(self):
-        from percy.screenshot import _resolve_readiness_config
         # Defensive: CLI healthcheck could return snapshot: null
         merged = _resolve_readiness_config({'snapshot': None}, {})
         self.assertEqual(merged, {})
 
     def test_resolve_readiness_config_handles_non_dict_inputs(self):
-        from percy.screenshot import _resolve_readiness_config
         merged = _resolve_readiness_config(
             {'snapshot': {'readiness': 'not-a-dict'}},
             {'readiness': 12345}
@@ -335,14 +333,12 @@ class TestReadinessGate(unittest.TestCase):
         self.assertEqual(merged, {})
 
     def test_wait_for_ready_opt_in_skips_when_no_config(self):
-        from percy.screenshot import _wait_for_ready
         page = MagicMock()
         result = _wait_for_ready(page, percy_config={}, kwargs={})
         self.assertIsNone(result)
         page.evaluate.assert_not_called()
 
     def test_wait_for_ready_runs_when_kwargs_opt_in(self):
-        from percy.screenshot import _wait_for_ready
         diagnostics = {'passed': True, 'preset': 'balanced'}
         page = MagicMock()
         page.evaluate.return_value = diagnostics
@@ -357,7 +353,6 @@ class TestReadinessGate(unittest.TestCase):
         self.assertEqual(args[1], 12000)  # default deadline_ms (10000 + 2000)
 
     def test_wait_for_ready_runs_when_global_config_opts_in(self):
-        from percy.screenshot import _wait_for_ready
         page = MagicMock()
         page.evaluate.return_value = None
         percy_config = {'snapshot': {'readiness': {'preset': 'balanced'}}}
@@ -367,7 +362,6 @@ class TestReadinessGate(unittest.TestCase):
         self.assertEqual(page.evaluate.call_count, 1)
 
     def test_wait_for_ready_skips_disabled_preset(self):
-        from percy.screenshot import _wait_for_ready
         page = MagicMock()
         result = _wait_for_ready(
             page, percy_config={}, kwargs={'readiness': {'preset': 'disabled'}})
@@ -375,7 +369,6 @@ class TestReadinessGate(unittest.TestCase):
         page.evaluate.assert_not_called()
 
     def test_wait_for_ready_inlines_per_snapshot_config_into_args(self):
-        from percy.screenshot import _wait_for_ready
         page = MagicMock()
         page.evaluate.return_value = None
         cfg = {'preset': 'strict', 'stabilityWindowMs': 500}
@@ -386,7 +379,6 @@ class TestReadinessGate(unittest.TestCase):
         self.assertEqual(eval_args[0], cfg)
 
     def test_wait_for_ready_honors_timeoutMs_for_deadline(self):
-        from percy.screenshot import _wait_for_ready
         page = MagicMock()
         page.evaluate.return_value = None
 
@@ -399,7 +391,6 @@ class TestReadinessGate(unittest.TestCase):
         self.assertEqual(eval_args[1], 7000)
 
     def test_wait_for_ready_swallows_exception_and_returns_none(self):
-        from percy.screenshot import _wait_for_ready
         page = MagicMock()
         page.evaluate.side_effect = RuntimeError('boom')
 
@@ -413,7 +404,6 @@ class TestReadinessGate(unittest.TestCase):
     def test_get_serialized_dom_skips_readiness_when_flag_set(self):
         """skip_readiness=True (responsive capture path) reuses the caller's
         diagnostics instead of running readiness again per width."""
-        from percy.screenshot import get_serialized_dom
         page = MagicMock()
         page.evaluate.return_value = {'html': '<html></html>'}
         page.url = 'http://localhost:8000/'
