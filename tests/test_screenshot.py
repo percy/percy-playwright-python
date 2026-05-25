@@ -303,7 +303,9 @@ class TestPercySnapshot(unittest.TestCase):
         mock_snapshot()
 
         with patch.object(self.page, 'evaluate', wraps=self.page.evaluate) as spy:
-            percy_snapshot(self.page, 'readiness-happy-path')
+            # Explicit `readiness` opts the snapshot into the gate
+            # (default-off when no readiness config; see _wait_for_ready).
+            percy_snapshot(self.page, 'readiness-happy-path', readiness={})
 
         scripts = [c.args[0] for c in spy.call_args_list if c.args and isinstance(c.args[0], str)]
         # Readiness evaluate fires first (contains waitForReady)
@@ -356,7 +358,7 @@ class TestPercySnapshot(unittest.TestCase):
             return orig_evaluate(script, *args, **kwargs)
 
         with patch.object(self.page, 'evaluate', side_effect=side_effect):
-            percy_snapshot(self.page, 'readiness-boom')
+            percy_snapshot(self.page, 'readiness-boom', readiness={})
 
         paths = [req.path for req in httpretty.latest_requests()]
         self.assertIn('/percy/snapshot', paths)
