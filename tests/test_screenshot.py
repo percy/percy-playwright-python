@@ -302,13 +302,18 @@ class TestPercySnapshot(unittest.TestCase):
         mock_healthcheck()
         mock_snapshot()
 
-        with patch.object(self.page, 'evaluate', wraps=self.page.evaluate) as spy:
-            # Explicit `readiness` opts the snapshot into the gate
-            # (default-off when no readiness config; see _wait_for_ready).
+        # Stub page.evaluate via side_effect so we capture script content
+        # without making real CDP calls (real Playwright eval has hung CI
+        # when the in-page Promise relies on observers that never quiesce).
+        orig_evaluate = self.page.evaluate
+        def side_effect(script, *args, **kwargs):
+            if isinstance(script, str) and 'waitForReady' in script:
+                return None
+            return orig_evaluate(script, *args, **kwargs)
+        with patch.object(self.page, 'evaluate', side_effect=side_effect) as spy:
             percy_snapshot(self.page, 'readiness-happy-path', readiness={})
 
         scripts = [c.args[0] for c in spy.call_args_list if c.args and isinstance(c.args[0], str)]
-        # Readiness evaluate fires first (contains waitForReady)
         self.assertTrue(any('waitForReady' in s for s in scripts),
                         f'expected readiness script, got: {scripts}')
         self.assertTrue(any('PercyDOM.serialize' in s for s in scripts),
@@ -322,7 +327,12 @@ class TestPercySnapshot(unittest.TestCase):
         mock_snapshot()
         readiness = {'preset': 'strict', 'stabilityWindowMs': 500}
 
-        with patch.object(self.page, 'evaluate', wraps=self.page.evaluate) as spy:
+        orig_evaluate = self.page.evaluate
+        def side_effect(script, *args, **kwargs):
+            if isinstance(script, str) and 'waitForReady' in script:
+                return None
+            return orig_evaluate(script, *args, **kwargs)
+        with patch.object(self.page, 'evaluate', side_effect=side_effect) as spy:
             percy_snapshot(self.page, 'readiness-config', readiness=readiness)
 
         # Find the readiness evaluate call and assert the config arg.
@@ -341,7 +351,12 @@ class TestPercySnapshot(unittest.TestCase):
         mock_healthcheck()
         mock_snapshot()
 
-        with patch.object(self.page, 'evaluate', wraps=self.page.evaluate) as spy:
+        orig_evaluate = self.page.evaluate
+        def side_effect(script, *args, **kwargs):
+            if isinstance(script, str) and 'waitForReady' in script:
+                return None
+            return orig_evaluate(script, *args, **kwargs)
+        with patch.object(self.page, 'evaluate', side_effect=side_effect) as spy:
             percy_snapshot(self.page, 'readiness-disabled',
                            readiness={'preset': 'disabled'})
 
