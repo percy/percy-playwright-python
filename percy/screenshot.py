@@ -207,8 +207,11 @@ def _wait_for_ready(page, percy_config, kwargs):
     # keep ticking) would block the whole snapshot suite. Race against a
     # Promise that resolves after the readiness deadline + 2s buffer.
     timeout_ms = readiness_config.get('timeoutMs')  # pragma: no cover
-    deadline_ms = int((timeout_ms if isinstance(timeout_ms, (int, float)) and timeout_ms > 0  # pragma: no cover
-                       else 10000) + 2000)
+    # pragma: no cover
+    deadline_ms = int(  # pragma: no cover
+        (timeout_ms if isinstance(timeout_ms, (int, float)) and timeout_ms > 0 else 10000)
+        + 2000
+    )
     try:  # pragma: no cover
         return page.evaluate(
             "([cfg, deadlineMs]) => {"
