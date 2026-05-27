@@ -61,3 +61,12 @@ class TestCache(unittest.TestCase):
         self.assertIn(self.session_id, self.cache.CACHE)
         self.assertIn("session_details", self.cache.CACHE[self.session_id])
         self.assertNotIn("key-1", self.cache.CACHE[self.session_id])
+
+    def test_cleanup_cache_skips_entry_missing_timeout_key(self):
+        orphan_id = "orphan_session"
+        self.cache.CACHE[orphan_id] = {Cache.session_details: {"hashed_id": "x"}}
+        self.cache.cleanup_cache()
+        self.assertEqual(
+            self.cache.CACHE[orphan_id], {Cache.session_details: {"hashed_id": "x"}}
+        )
+        del self.cache.CACHE[orphan_id]

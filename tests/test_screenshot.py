@@ -24,6 +24,8 @@ from percy.screenshot import (
     change_window_dimension_and_wait,
     get_serialized_dom,
     process_frame,
+    expose_closed_shadow_roots,
+    _walk_nodes,
     log,
     _resolve_readiness_config,
     _wait_for_ready,
@@ -1416,6 +1418,106 @@ class TestResponsiveHelpers(unittest.TestCase):
         }
 
         self.assertEqual(result, expected_result)
+
+
+class TestClosedShadowDOM(unittest.TestCase):
+    """Tests for expose_closed_shadow_roots and _walk_nodes."""
+
+    def test_walk_nodes_finds_closed_shadow_roots(self):
+        # uses top-level _walk_nodes import
+        node = {
+            "backendNodeId": 1,
+            "shadowRoots": [
+                {"backendNodeId": 2, "shadowRootType": "closed", "children": []},
+                {"backendNodeId": 3, "shadowRootType": "open", "children": []}
+            ],
+            "children": []
+        }
+        pairs = []
+        _walk_nodes(node, pairs)
+        self.assertEqual(len(pairs), 1)
+        self.assertEqual(pairs[0]["hostBackendNodeId"], 1)
+        self.assertEqual(pairs[0]["shadowBackendNodeId"], 2)
+
+    def test_walk_nodes_skips_content_document(self):
+        # uses top-level _walk_nodes import
+        node = {
+            "backendNodeId": 1,
+            "contentDocument": {"backendNodeId": 2, "children": [
+                {"backendNodeId": 3, "shadowRoots": [
+                    {"backendNodeId": 4, "shadowRootType": "closed", "children": []}
+                ], "children": []}
+            ]},
+            "children": []
+        }
+        pairs = []
+        _walk_nodes(node, pairs)
+        self.assertEqual(len(pairs), 0)
+
+    def test_expose_non_chromium_browser(self):
+        # uses top-level expose_closed_shadow_roots import
+        page = MagicMock()
+        page.context.new_cdp_session.side_effect = Exception("Not Chromium")
+        # Should not throw
+        expose_closed_shadow_roots(page)
+
+    def test_expose_no_closed_roots(self):
+        # uses top-level expose_closed_shadow_roots import
+        page = MagicMock()
+        cdp = MagicMock()
+        page.context.new_cdp_session.return_value = cdp
+        cdp.send.side_effect = lambda method, params=None: (
+            {"root": {"backendNodeId": 1, "children": []}} if method == "DOM.getDocument" else None
+        )
+        expose_closed_shadow_roots(page)
+        cdp.detach.assert_called_once()
+        page.evaluate.assert_not_called()
+
+    def test_expose_closed_roots_found(self):
+        # uses top-level expose_closed_shadow_roots import
+        page = MagicMock()
+        cdp = MagicMock()
+        page.context.new_cdp_session.return_value = cdp
+
+        def cdp_send(method, params=None):
+            if method == "DOM.getDocument":
+                return {"root": {"backendNodeId": 1, "children": [
+                    {"backendNodeId": 10, "shadowRoots": [
+                        {"backendNodeId": 20, "shadowRootType": "closed", "children": []}
+                    ], "children": []}
+                ]}}
+            if method == "DOM.resolveNode":
+                return {"object": {"objectId": f"obj-{params['backendNodeId']}"}}
+            return None
+
+        cdp.send.side_effect = cdp_send
+        expose_closed_shadow_roots(page)
+        page.evaluate.assert_called_once()
+        cdp.detach.assert_called_once()
+
+    def test_expose_cdp_error_non_fatal(self):
+        # uses top-level expose_closed_shadow_roots import
+        page = MagicMock()
+        cdp = MagicMock()
+        page.context.new_cdp_session.return_value = cdp
+        cdp.send.side_effect = Exception("CDP failed")
+        # Should not throw
+        expose_closed_shadow_roots(page)
+        cdp.detach.assert_called_once()
+
+    def test_expose_detach_error_suppressed(self):
+        # covers lines 174-175: except Exception: pass in finally
+        # uses top-level expose_closed_shadow_roots import
+        page = MagicMock()
+        cdp = MagicMock()
+        page.context.new_cdp_session.return_value = cdp
+        cdp.send.side_effect = lambda method, params=None: (
+            {"root": {"backendNodeId": 1, "children": []}}
+            if method == "DOM.getDocument" else None
+        )
+        cdp.detach.side_effect = Exception("Detach failed")
+        # Should not throw even when detach fails
+        expose_closed_shadow_roots(page)
 
 
 if __name__ == "__main__":
