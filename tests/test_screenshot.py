@@ -534,6 +534,59 @@ class TestPercyFunctions(unittest.TestCase):
             posted["dom_snapshot"]["cookies"], [{"name": "foo", "value": "bar"}]
         )
 
+    @patch("requests.post")
+    @patch("percy.screenshot.fetch_percy_dom")
+    @patch("percy.screenshot._is_percy_enabled")
+    def test_percy_snapshot_merges_config_with_per_call_options(
+        self, mock_is_percy_enabled, mock_fetch_percy_dom, mock_post
+    ):
+        """.percy.yml config <-> per-snapshot merge precedence:
+        config-only keys (enableJavaScript) flow through to PercyDOM.serialize,
+        and per-call keys (percyCSS) override the config value."""
+        mock_is_percy_enabled.return_value = {
+            "session_type": "web",
+            "config": {
+                "snapshot": {
+                    "enableJavaScript": True,
+                    "percyCSS": "FROM_CONFIG",
+                }
+            },
+            "widths": {},
+            "device_details": [],
+        }
+        mock_fetch_percy_dom.return_value = "some_js_code"
+
+        # Capture the args passed to the PercyDOM.serialize evaluate call.
+        serialize_calls = []
+
+        def evaluate_side_effect(script, *args):
+            if isinstance(script, str) and "PercyDOM.serialize(" in script:
+                payload = script[len("PercyDOM.serialize("):-1]
+                serialize_calls.append(json.loads(payload))
+                return {"html": "<html></html>"}
+            return None
+
+        page = MagicMock()
+        page.evaluate.side_effect = evaluate_side_effect
+        page.context.cookies.return_value = []
+        page.frames = []
+        page.url = "http://example.com"
+        mock_post.return_value.status_code = 200
+        mock_post.return_value.json.return_value = {
+            "success": True,
+            "data": "snapshot_data",
+        }
+
+        # per-call percyCSS must win over the config value
+        percy_snapshot(page, "snapshot_name", percyCSS="FROM_CALL")
+
+        self.assertEqual(len(serialize_calls), 1)
+        serialized_args = serialize_calls[0]
+        # config-only key flows through
+        self.assertEqual(serialized_args["enableJavaScript"], True)
+        # per-call key wins over config
+        self.assertEqual(serialized_args["percyCSS"], "FROM_CALL")
+
     def test_process_frame_returns_cors_iframe_data(self):
         page = MagicMock()
         page.evaluate.return_value = {"percyElementId": "iframe-1"}
