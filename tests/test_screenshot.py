@@ -27,6 +27,7 @@ from percy.screenshot import (
     log,
     _resolve_readiness_config,
     _wait_for_ready,
+    _deep_merge,
 )
 import percy.screenshot as local
 
@@ -303,6 +304,26 @@ class TestReadinessGate(unittest.TestCase):
     """Unit tests for _wait_for_ready / _resolve_readiness_config using a
     fully-mocked Page. Bypasses real Playwright CDP traffic, so cannot hang
     on real in-page observers like the integration-style tests did."""
+
+    def test_deep_merge_recurses_nested_dicts(self):
+        merged = _deep_merge(
+            {"discovery": {"networkIdleTimeout": 50, "disableCache": False}},
+            {"discovery": {"disableCache": True}},
+        )
+        self.assertEqual(
+            merged,
+            {"discovery": {"networkIdleTimeout": 50, "disableCache": True}},
+        )
+
+    def test_deep_merge_replaces_lists_and_scalars(self):
+        merged = _deep_merge(
+            {"widths": [375, 1280], "name": "a", "discovery": {"x": 1}},
+            {"widths": [800], "name": "b", "discovery": 5},
+        )
+        self.assertEqual(
+            merged,
+            {"widths": [800], "name": "b", "discovery": 5},
+        )
 
     def test_resolve_readiness_config_shallow_merges(self):
         merged = _resolve_readiness_config(
@@ -586,6 +607,58 @@ class TestPercyFunctions(unittest.TestCase):
         self.assertEqual(serialized_args["enableJavaScript"], True)
         # per-call key wins over config
         self.assertEqual(serialized_args["percyCSS"], "FROM_CALL")
+
+    @patch("requests.post")
+    @patch("percy.screenshot.fetch_percy_dom")
+    @patch("percy.screenshot._is_percy_enabled")
+    def test_percy_snapshot_deep_merges_nested_config(
+        self, mock_is_percy_enabled, mock_fetch_percy_dom, mock_post
+    ):
+        """Nested .percy.yml config <-> per-call merge must DEEP-merge: a per-call
+        override of one nested key must not wipe out sibling keys from config."""
+        mock_is_percy_enabled.return_value = {
+            "session_type": "web",
+            "config": {
+                "snapshot": {
+                    "discovery": {
+                        "networkIdleTimeout": 50,
+                        "disableCache": False,
+                    }
+                }
+            },
+            "widths": {},
+            "device_details": [],
+        }
+        mock_fetch_percy_dom.return_value = "some_js_code"
+
+        serialize_calls = []
+
+        def evaluate_side_effect(script, *_args):
+            if isinstance(script, str) and "PercyDOM.serialize(" in script:
+                payload = script[len("PercyDOM.serialize("):-1]
+                serialize_calls.append(json.loads(payload))
+                return {"html": "<html></html>"}
+            return None
+
+        page = MagicMock()
+        page.evaluate.side_effect = evaluate_side_effect
+        page.context.cookies.return_value = []
+        page.frames = []
+        page.url = "http://example.com"
+        mock_post.return_value.status_code = 200
+        mock_post.return_value.json.return_value = {
+            "success": True,
+            "data": "snapshot_data",
+        }
+
+        # per-call only overrides discovery.disableCache; networkIdleTimeout must survive
+        percy_snapshot(page, "snapshot_name", discovery={"disableCache": True})
+
+        self.assertEqual(len(serialize_calls), 1)
+        self.assertEqual(
+            serialize_calls[0]["discovery"],
+            {"networkIdleTimeout": 50, "disableCache": True},
+        )
 
     def test_process_frame_returns_cors_iframe_data(self):
         page = MagicMock()
