@@ -559,7 +559,7 @@ class TestPercyFunctions(unittest.TestCase):
         # Capture the args passed to the PercyDOM.serialize evaluate call.
         serialize_calls = []
 
-        def evaluate_side_effect(script, *args):
+        def evaluate_side_effect(script, *_args):
             if isinstance(script, str) and "PercyDOM.serialize(" in script:
                 payload = script[len("PercyDOM.serialize("):-1]
                 serialize_calls.append(json.loads(payload))
