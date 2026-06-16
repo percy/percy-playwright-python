@@ -769,6 +769,7 @@ class TestPercyFunctions(unittest.TestCase):
             [{"name": "foo", "value": "bar"}],
             "some_js_code",
             config={"snapshot": {"responsiveSnapshotCapture": True}},
+            responsiveSnapshotCapture=True,
         )
         posted = mock_post.call_args.kwargs["json"]
         self.assertEqual(posted["dom_snapshot"], mock_capture_responsive_dom.return_value)
