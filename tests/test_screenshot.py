@@ -26,6 +26,8 @@ from percy.screenshot import (
     process_frame,
     expose_closed_shadow_roots,
     _walk_nodes,
+    _get_origin,
+    _same_origin,
     log,
     _resolve_readiness_config,
     _wait_for_ready,
@@ -1221,6 +1223,8 @@ class TestResponsiveHelpers(unittest.TestCase):
         ) as mock_resize, patch(
             "percy.screenshot.fetch_percy_dom"
         ) as mock_fetch, patch(
+            "percy.screenshot.expose_closed_shadow_roots"
+        ) as mock_expose, patch(
             "percy.screenshot.sleep"
         ) as mock_sleep:
             mock_widths.return_value = [
@@ -1239,6 +1243,9 @@ class TestResponsiveHelpers(unittest.TestCase):
         page.evaluate.assert_any_call("dom-script")
         self.assertEqual(page.evaluate.call_count, 5)
         self.assertEqual(page.reload.call_count, 2)
+        # WeakMap must be re-primed after each reload (one per width here)
+        self.assertEqual(mock_expose.call_count, 2)
+        mock_expose.assert_has_calls([call(page), call(page)])
         mock_sleep.assert_any_call(1)
         self.assertEqual(mock_sleep.call_count, 2)
         mock_resize.assert_has_calls(
@@ -1439,7 +1446,8 @@ class TestClosedShadowDOM(unittest.TestCase):
         self.assertEqual(pairs[0]["hostBackendNodeId"], 1)
         self.assertEqual(pairs[0]["shadowBackendNodeId"], 2)
 
-    def test_walk_nodes_skips_content_document(self):
+    def test_walk_nodes_skips_content_document_missing_url(self):
+        # contentDocument with no documentURL -> defensive skip
         # uses top-level _walk_nodes import
         node = {
             "backendNodeId": 1,
@@ -1451,8 +1459,88 @@ class TestClosedShadowDOM(unittest.TestCase):
             "children": []
         }
         pairs = []
-        _walk_nodes(node, pairs)
+        _walk_nodes(node, pairs, "https://example.com")
         self.assertEqual(len(pairs), 0)
+
+    def test_walk_nodes_recurses_into_same_origin_iframe(self):
+        # Same-origin contentDocument -> recurse and capture closed roots inside
+        # uses top-level _walk_nodes import
+        node = {
+            "backendNodeId": 1,
+            "contentDocument": {
+                "backendNodeId": 2,
+                "documentURL": "https://example.com/inner",
+                "children": [
+                    {"backendNodeId": 3, "shadowRoots": [
+                        {"backendNodeId": 4, "shadowRootType": "closed",
+                         "children": []}
+                    ], "children": []}
+                ]
+            },
+            "children": []
+        }
+        pairs = []
+        _walk_nodes(node, pairs, "https://example.com")
+        self.assertEqual(len(pairs), 1)
+        self.assertEqual(pairs[0]["hostBackendNodeId"], 3)
+        self.assertEqual(pairs[0]["shadowBackendNodeId"], 4)
+
+    def test_walk_nodes_skips_cross_origin_iframe(self):
+        # Cross-origin contentDocument -> skip the nested document entirely
+        # uses top-level _walk_nodes import
+        node = {
+            "backendNodeId": 1,
+            "contentDocument": {
+                "backendNodeId": 2,
+                "documentURL": "https://other.com/inner",
+                "children": [
+                    {"backendNodeId": 3, "shadowRoots": [
+                        {"backendNodeId": 4, "shadowRootType": "closed",
+                         "children": []}
+                    ], "children": []}
+                ]
+            },
+            "children": []
+        }
+        pairs = []
+        _walk_nodes(node, pairs, "https://example.com")
+        self.assertEqual(len(pairs), 0)
+
+    def test_walk_nodes_skips_iframe_when_page_origin_unknown(self):
+        # documentURL present but no page origin to compare against -> skip
+        # uses top-level _walk_nodes import
+        node = {
+            "backendNodeId": 1,
+            "contentDocument": {
+                "backendNodeId": 2,
+                "documentURL": "https://example.com/inner",
+                "children": [
+                    {"backendNodeId": 3, "shadowRoots": [
+                        {"backendNodeId": 4, "shadowRootType": "closed",
+                         "children": []}
+                    ], "children": []}
+                ]
+            },
+            "children": []
+        }
+        pairs = []
+        _walk_nodes(node, pairs, "")
+        self.assertEqual(len(pairs), 0)
+
+    def test_get_origin_and_same_origin(self):
+        self.assertEqual(
+            _get_origin("https://example.com:8080/a/b"),
+            "https://example.com:8080"
+        )
+        self.assertEqual(_get_origin(""), "")
+        self.assertEqual(_get_origin("not a url"), "")
+        self.assertTrue(
+            _same_origin("https://example.com/x", "https://example.com")
+        )
+        self.assertFalse(
+            _same_origin("https://other.com/x", "https://example.com")
+        )
+        self.assertFalse(_same_origin("https://example.com/x", ""))
 
     def test_expose_non_chromium_browser(self):
         # uses top-level expose_closed_shadow_roots import
@@ -1464,6 +1552,7 @@ class TestClosedShadowDOM(unittest.TestCase):
     def test_expose_no_closed_roots(self):
         # uses top-level expose_closed_shadow_roots import
         page = MagicMock()
+        page.url = "https://example.com"
         cdp = MagicMock()
         page.context.new_cdp_session.return_value = cdp
         cdp.send.side_effect = lambda method, params=None: (
@@ -1472,10 +1561,15 @@ class TestClosedShadowDOM(unittest.TestCase):
         expose_closed_shadow_roots(page)
         cdp.detach.assert_called_once()
         page.evaluate.assert_not_called()
+        # DOM.disable must be paired with the successful DOM.enable
+        sent = [c.args[0] for c in cdp.send.call_args_list]
+        self.assertIn("DOM.enable", sent)
+        self.assertIn("DOM.disable", sent)
 
     def test_expose_closed_roots_found(self):
         # uses top-level expose_closed_shadow_roots import
         page = MagicMock()
+        page.url = "https://example.com"
         cdp = MagicMock()
         page.context.new_cdp_session.return_value = cdp
 
@@ -1493,6 +1587,43 @@ class TestClosedShadowDOM(unittest.TestCase):
         cdp.send.side_effect = cdp_send
         expose_closed_shadow_roots(page)
         page.evaluate.assert_called_once()
+        cdp.detach.assert_called_once()
+
+    def test_expose_sends_dom_disable_after_mid_walk_failure(self):
+        # DOM.enable succeeded but a later send raised -> DOM.disable still sent
+        # uses top-level expose_closed_shadow_roots import
+        page = MagicMock()
+        page.url = "https://example.com"
+        cdp = MagicMock()
+        page.context.new_cdp_session.return_value = cdp
+
+        # DOM.enable returns None (success); DOM.getDocument raises mid-walk
+        def cdp_send(method, _params=None):
+            if method == "DOM.getDocument":
+                raise Exception("walk blew up")
+
+        cdp.send.side_effect = cdp_send
+        expose_closed_shadow_roots(page)
+        sent = [c.args[0] for c in cdp.send.call_args_list]
+        self.assertIn("DOM.disable", sent)
+        cdp.detach.assert_called_once()
+
+    def test_expose_does_not_send_dom_disable_when_enable_failed(self):
+        # DOM.enable itself raised -> no spurious DOM.disable
+        # uses top-level expose_closed_shadow_roots import
+        page = MagicMock()
+        page.url = "https://example.com"
+        cdp = MagicMock()
+        page.context.new_cdp_session.return_value = cdp
+
+        def cdp_send(method, _params=None):
+            if method == "DOM.enable":
+                raise Exception("enable failed")
+
+        cdp.send.side_effect = cdp_send
+        expose_closed_shadow_roots(page)
+        sent = [c.args[0] for c in cdp.send.call_args_list]
+        self.assertNotIn("DOM.disable", sent)
         cdp.detach.assert_called_once()
 
     def test_expose_cdp_error_non_fatal(self):

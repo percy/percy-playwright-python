@@ -96,10 +96,50 @@ def fetch_percy_dom():
     return response.text
 
 
-def _walk_nodes(node, closed_pairs):
-    """Walk CDP DOM tree to find closed shadow roots, skipping iframe boundaries."""
+def _get_origin(url):
+    """Return scheme://host:port for a URL, or '' if it can't be parsed."""
+    if not url:
+        return ""
+    try:
+        parsed = urlparse(url)
+        if not parsed.scheme or not parsed.netloc:
+            return ""
+        return f"{parsed.scheme}://{parsed.netloc}"
+    except Exception:  # pragma: no cover
+        return ""
+
+
+def _same_origin(url, page_origin):
+    """True when `url`'s origin (scheme + host + port) matches the page origin."""
+    if not page_origin:
+        return False
+    return _get_origin(url) == page_origin
+
+
+def _walk_nodes(node, closed_pairs, page_origin=""):
+    """Walk CDP DOM tree to find closed shadow roots.
+
+    Same-origin child frame documents share the parent's JS realm and the
+    `window.__percyClosedShadowRoots` WeakMap that PercyDOM.serialize reads,
+    so we recurse INTO them. Cross-origin frames live in a different realm
+    (their resolveNode objectIds wouldn't belong to our execution context),
+    so they're skipped. A contentDocument with no resolvable origin is also
+    skipped defensively."""
     if "contentDocument" in node:
-        return
+        content_doc = node["contentDocument"]
+        document_url = content_doc.get("documentURL")
+        if not document_url:
+            return
+        if not _same_origin(document_url, page_origin):
+            log(
+                "Skipping cross-origin frame document during"
+                f" closed-shadow walk: {document_url}",
+                lvl="debug"
+            )
+            return
+        # Same-origin frame: walk into the contentDocument as if it were any
+        # other subtree, then continue with this node's own children below.
+        _walk_nodes(content_doc, closed_pairs, page_origin)
     if "shadowRoots" in node:
         for sr in node["shadowRoots"]:
             if sr.get("shadowRootType") == "closed":
@@ -107,28 +147,35 @@ def _walk_nodes(node, closed_pairs):
                     "hostBackendNodeId": node["backendNodeId"],
                     "shadowBackendNodeId": sr["backendNodeId"]
                 })
-            _walk_nodes(sr, closed_pairs)
+            _walk_nodes(sr, closed_pairs, page_origin)
     if "children" in node:
         for child in node["children"]:
-            _walk_nodes(child, closed_pairs)
+            _walk_nodes(child, closed_pairs, page_origin)
 
 
+# pylint: disable=too-many-locals
 def expose_closed_shadow_roots(page):
     """Use CDP to discover closed shadow roots and expose them to PercyDOM.serialize().
     Closed shadow roots are inaccessible from JS (element.shadowRoot === null),
     but CDP's DOM domain can pierce them."""
     cdp_session = None
+    dom_enabled = False
     try:
         cdp_session = page.context.new_cdp_session(page)
 
         cdp_session.send("DOM.enable")
+        dom_enabled = True
         doc_result = cdp_session.send(
             "DOM.getDocument", {"depth": -1, "pierce": True}
         )
         root = doc_result["root"]
 
+        # Compute the top-level page origin once so the walker can recurse
+        # into same-origin child frame documents but skip cross-origin ones.
+        page_origin = _get_origin(page.url)
+
         closed_pairs = []
-        _walk_nodes(root, closed_pairs)
+        _walk_nodes(root, closed_pairs, page_origin)
 
         if not closed_pairs:
             return
@@ -174,6 +221,14 @@ def expose_closed_shadow_roots(page):
             lvl="debug"
         )
     finally:
+        # Release the DOM domain so subsequent CDP commands don't keep
+        # emitting DOM events for this session. Only sent when DOM.enable
+        # succeeded — a failing enable must not emit a spurious disable.
+        if dom_enabled:
+            try:
+                cdp_session.send("DOM.disable")
+            except Exception:  # pragma: no cover
+                pass
         if cdp_session:  # pragma: no branch
             try:
                 cdp_session.detach()
@@ -524,6 +579,9 @@ def capture_responsive_dom(page, cookies, percy_dom_script=None, config=None, **
         if PERCY_RESPONSIVE_CAPTURE_RELOAD_PAGE:
             page.reload()
             page.evaluate(percy_dom_script)
+            # Re-prime the closed-shadow-root WeakMap — page.reload() creates a
+            # new document and erases window.__percyClosedShadowRoots.
+            expose_closed_shadow_roots(page)
             page.evaluate("PercyDOM.waitForResize()")
             resize_count = 0
 
