@@ -1462,8 +1462,12 @@ class TestClosedShadowDOM(unittest.TestCase):
         _walk_nodes(node, pairs, "https://example.com")
         self.assertEqual(len(pairs), 0)
 
-    def test_walk_nodes_recurses_into_same_origin_iframe(self):
-        # Same-origin contentDocument -> recurse and capture closed roots inside
+    def test_walk_nodes_skips_same_origin_iframe(self):
+        # Any node with a contentDocument is skipped, even same-origin. A child
+        # frame document lives in its own JS realm; resolving a host inside it
+        # would land in a realm without window.__percyClosedShadowRoots and
+        # throw. Matches percy-playwright JS / puppeteer / playwright-java,
+        # which all `return` on contentDocument.
         # uses top-level _walk_nodes import
         node = {
             "backendNodeId": 1,
@@ -1481,9 +1485,40 @@ class TestClosedShadowDOM(unittest.TestCase):
         }
         pairs = []
         _walk_nodes(node, pairs, "https://example.com")
+        self.assertEqual(len(pairs), 0)
+
+    def test_walk_nodes_continues_siblings_after_iframe(self):
+        # An iframe node is skipped, but closed shadow roots elsewhere in the
+        # top-frame tree are still captured.
+        # uses top-level _walk_nodes import
+        root = {
+            "backendNodeId": 1,
+            "children": [
+                {
+                    "backendNodeId": 2,
+                    "contentDocument": {
+                        "backendNodeId": 3,
+                        "documentURL": "https://example.com/inner",
+                        "children": [
+                            {"backendNodeId": 4, "shadowRoots": [
+                                {"backendNodeId": 5, "shadowRootType": "closed",
+                                 "children": []}
+                            ], "children": []}
+                        ]
+                    },
+                    "children": []
+                },
+                {"backendNodeId": 6, "shadowRoots": [
+                    {"backendNodeId": 7, "shadowRootType": "closed",
+                     "children": []}
+                ], "children": []}
+            ]
+        }
+        pairs = []
+        _walk_nodes(root, pairs, "https://example.com")
         self.assertEqual(len(pairs), 1)
-        self.assertEqual(pairs[0]["hostBackendNodeId"], 3)
-        self.assertEqual(pairs[0]["shadowBackendNodeId"], 4)
+        self.assertEqual(pairs[0]["hostBackendNodeId"], 6)
+        self.assertEqual(pairs[0]["shadowBackendNodeId"], 7)
 
     def test_walk_nodes_skips_cross_origin_iframe(self):
         # Cross-origin contentDocument -> skip the nested document entirely
@@ -1587,6 +1622,45 @@ class TestClosedShadowDOM(unittest.TestCase):
         cdp.send.side_effect = cdp_send
         expose_closed_shadow_roots(page)
         page.evaluate.assert_called_once()
+        cdp.detach.assert_called_once()
+
+    def test_expose_one_failing_host_does_not_abort_others(self):
+        # Two closed shadow hosts; resolving the FIRST host raises. The second
+        # host must still be exposed (per-host try/except). uses top-level
+        # expose_closed_shadow_roots import
+        page = MagicMock()
+        page.url = "https://example.com"
+        cdp = MagicMock()
+        page.context.new_cdp_session.return_value = cdp
+
+        good_calls = []
+
+        def cdp_send(method, params=None):
+            if method == "DOM.getDocument":
+                return {"root": {"backendNodeId": 1, "children": [
+                    {"backendNodeId": 10, "shadowRoots": [
+                        {"backendNodeId": 20, "shadowRootType": "closed",
+                         "children": []}
+                    ], "children": []},
+                    {"backendNodeId": 30, "shadowRoots": [
+                        {"backendNodeId": 40, "shadowRootType": "closed",
+                         "children": []}
+                    ], "children": []}
+                ]}}
+            if method == "DOM.resolveNode":
+                bid = params["backendNodeId"]
+                # First host (10) blows up; everything else resolves.
+                if bid == 10:
+                    raise Exception("detached node")
+                return {"object": {"objectId": f"obj-{bid}"}}
+            if method == "Runtime.callFunctionOn":
+                good_calls.append(params["objectId"])
+            return None
+
+        cdp.send.side_effect = cdp_send
+        expose_closed_shadow_roots(page)
+        # The second host (30) was still exposed despite the first failing.
+        self.assertEqual(good_calls, ["obj-30"])
         cdp.detach.assert_called_once()
 
     def test_expose_sends_dom_disable_after_mid_walk_failure(self):

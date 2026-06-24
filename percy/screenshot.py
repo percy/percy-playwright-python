@@ -119,27 +119,22 @@ def _same_origin(url, page_origin):
 def _walk_nodes(node, closed_pairs, page_origin=""):
     """Walk CDP DOM tree to find closed shadow roots.
 
-    Same-origin child frame documents share the parent's JS realm and the
-    `window.__percyClosedShadowRoots` WeakMap that PercyDOM.serialize reads,
-    so we recurse INTO them. Cross-origin frames live in a different realm
-    (their resolveNode objectIds wouldn't belong to our execution context),
-    so they're skipped. A contentDocument with no resolvable origin is also
-    skipped defensively."""
+    Skip any node that has a `contentDocument` (an iframe document). This is a
+    load-bearing invariant shared with the canonical SDKs (percy-playwright JS,
+    percy-puppeteer, percy-playwright-java): every backendNodeId we later pass
+    to DOM.resolveNode must resolve into the TOP frame's main world — the same
+    realm where page.evaluate() creates window.__percyClosedShadowRoots. A
+    child frame document (even same-origin) lives in its own JS realm; resolving
+    a host inside it lands in a realm where the WeakMap is undefined and
+    Runtime.callFunctionOn throws. Same-origin only grants DOM access across
+    frames, NOT a shared JS execution context. Cross-frame closed shadow roots
+    are therefore not yet supported.
+
+    `page_origin` is retained for signature compatibility with existing callers
+    and tests but is unused now that we skip all iframe documents."""
+    # pylint: disable=unused-argument
     if "contentDocument" in node:
-        content_doc = node["contentDocument"]
-        document_url = content_doc.get("documentURL")
-        if not document_url:
-            return
-        if not _same_origin(document_url, page_origin):
-            log(
-                "Skipping cross-origin frame document during"
-                f" closed-shadow walk: {document_url}",
-                lvl="debug"
-            )
-            return
-        # Same-origin frame: walk into the contentDocument as if it were any
-        # other subtree, then continue with this node's own children below.
-        _walk_nodes(content_doc, closed_pairs, page_origin)
+        return
     if "shadowRoots" in node:
         for sr in node["shadowRoots"]:
             if sr.get("shadowRootType") == "closed":
@@ -170,8 +165,9 @@ def expose_closed_shadow_roots(page):
         )
         root = doc_result["root"]
 
-        # Compute the top-level page origin once so the walker can recurse
-        # into same-origin child frame documents but skip cross-origin ones.
+        # The walker skips all iframe documents (see _walk_nodes), so every
+        # resolved host stays in the top frame's main world. page_origin is
+        # passed only for signature compatibility and is no longer consulted.
         page_origin = _get_origin(page.url)
 
         closed_pairs = []
@@ -198,23 +194,34 @@ def expose_closed_shadow_roots(page):
             ".set(this, shadowRoot); }"
         )
         for pair in closed_pairs:
-            host_id = pair["hostBackendNodeId"]
-            host_result = cdp_session.send(
-                "DOM.resolveNode", {"backendNodeId": host_id}
-            )
-            host_object_id = host_result["object"]["objectId"]
+            # Wrap each per-host body so one bad backendNodeId (e.g. a node
+            # detached after DOM.getDocument but before DOM.resolveNode, or a
+            # host whose objectId resolves into an unexpected realm) doesn't
+            # abort exposure of the remaining hosts. Matches the per-host guard
+            # in percy-playwright-java.
+            try:
+                host_id = pair["hostBackendNodeId"]
+                host_result = cdp_session.send(
+                    "DOM.resolveNode", {"backendNodeId": host_id}
+                )
+                host_object_id = host_result["object"]["objectId"]
 
-            shadow_id = pair["shadowBackendNodeId"]
-            shadow_result = cdp_session.send(
-                "DOM.resolveNode", {"backendNodeId": shadow_id}
-            )
-            shadow_object_id = shadow_result["object"]["objectId"]
+                shadow_id = pair["shadowBackendNodeId"]
+                shadow_result = cdp_session.send(
+                    "DOM.resolveNode", {"backendNodeId": shadow_id}
+                )
+                shadow_object_id = shadow_result["object"]["objectId"]
 
-            cdp_session.send("Runtime.callFunctionOn", {
-                "functionDeclaration": fn_decl,
-                "objectId": host_object_id,
-                "arguments": [{"objectId": shadow_object_id}]
-            })
+                cdp_session.send("Runtime.callFunctionOn", {
+                    "functionDeclaration": fn_decl,
+                    "objectId": host_object_id,
+                    "arguments": [{"objectId": shadow_object_id}]
+                })
+            except Exception as per_host_err:
+                log(
+                    f"Skipping one closed shadow host: {per_host_err}",
+                    lvl="debug"
+                )
     except Exception as err:
         log(
             f"Could not expose closed shadow roots via CDP: {err}",
