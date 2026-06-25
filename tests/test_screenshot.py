@@ -24,6 +24,9 @@ from percy.screenshot import (
     change_window_dimension_and_wait,
     get_serialized_dom,
     process_frame,
+    _resolve_ignore_iframe_selectors,
+    _frame_ignore_flags,
+    _should_ignore_frame,
     expose_closed_shadow_roots,
     _walk_nodes,
     _get_origin,
@@ -301,6 +304,232 @@ class TestPercySnapshot(unittest.TestCase):
             "docs/percy/integrate/functional-and-visual",
             str(context.exception),
         )
+
+
+class TestIgnoreIframeFilters(unittest.TestCase):
+    """Unit tests for the data-percy-ignore + ignoreIframeSelectors filters
+    on the CORS-iframe capture path. Page/frames are fully mocked (no real
+    browser/CDP), mirroring the JS SDK semantics."""
+
+    # --- _resolve_ignore_iframe_selectors -------------------------------
+
+    def test_resolve_selectors_per_snapshot_snake_case(self):
+        self.assertEqual(
+            _resolve_ignore_iframe_selectors(
+                {"snapshot": {"ignoreIframeSelectors": [".global"]}},
+                {"ignore_iframe_selectors": [".local"]},
+            ),
+            [".local"],
+        )
+
+    def test_resolve_selectors_per_snapshot_camel_case(self):
+        self.assertEqual(
+            _resolve_ignore_iframe_selectors(
+                {}, {"ignoreIframeSelectors": [".camel"]}
+            ),
+            [".camel"],
+        )
+
+    def test_resolve_selectors_falls_back_to_global_config(self):
+        self.assertEqual(
+            _resolve_ignore_iframe_selectors(
+                {"snapshot": {"ignoreIframeSelectors": [".global", ".other"]}},
+                {},
+            ),
+            [".global", ".other"],
+        )
+
+    def test_resolve_selectors_string_is_wrapped(self):
+        self.assertEqual(
+            _resolve_ignore_iframe_selectors({}, {"ignoreIframeSelectors": ".one"}),
+            [".one"],
+        )
+
+    def test_resolve_selectors_filters_non_strings(self):
+        self.assertEqual(
+            _resolve_ignore_iframe_selectors(
+                {}, {"ignoreIframeSelectors": [".keep", 5, "", None, ".also"]}
+            ),
+            [".keep", ".also"],
+        )
+
+    def test_resolve_selectors_no_op_when_absent(self):
+        self.assertEqual(_resolve_ignore_iframe_selectors({}, {}), [])
+        self.assertEqual(_resolve_ignore_iframe_selectors(None, {}), [])
+
+    def test_resolve_selectors_no_op_for_unexpected_type(self):
+        self.assertEqual(
+            _resolve_ignore_iframe_selectors({}, {"ignoreIframeSelectors": {"a": 1}}),
+            [],
+        )
+
+    def test_resolve_selectors_handles_none_snapshot_section(self):
+        self.assertEqual(
+            _resolve_ignore_iframe_selectors({"snapshot": None}, {}), []
+        )
+
+    # --- _frame_ignore_flags --------------------------------------------
+
+    def test_frame_ignore_flags_passes_url_and_selectors(self):
+        page = MagicMock()
+        page.evaluate.return_value = {
+            "dataPercyIgnore": True, "matchesIgnoreSelector": False
+        }
+        frame = MagicMock()
+        frame.url = "http://other.example/frame"
+        flags = _frame_ignore_flags(page, frame, [".ad"])
+        self.assertTrue(flags["dataPercyIgnore"])
+        # selectors + url forwarded to the in-page evaluate
+        args = page.evaluate.call_args[0]
+        self.assertEqual(args[1], ["http://other.example/frame", [".ad"]])
+
+    def test_frame_ignore_flags_returns_falsey_on_error(self):
+        page = MagicMock()
+        page.evaluate.side_effect = Exception("detached")
+        frame = MagicMock()
+        frame.url = "http://other.example/frame"
+        self.assertEqual(
+            _frame_ignore_flags(page, frame, []),
+            {"dataPercyIgnore": False, "matchesIgnoreSelector": False},
+        )
+
+    # --- _should_ignore_frame -------------------------------------------
+
+    def test_should_ignore_frame_data_percy_ignore(self):
+        page = MagicMock()
+        frame = MagicMock()
+        frame.url = "http://other.example/frame"
+        with patch(
+            "percy.screenshot._frame_ignore_flags",
+            return_value={"dataPercyIgnore": True, "matchesIgnoreSelector": False},
+        ), patch("percy.screenshot.log") as mock_log:
+            self.assertTrue(_should_ignore_frame(page, frame, []))
+        mock_log.assert_called_once_with(
+            "Skipping iframe marked with data-percy-ignore: "
+            "http://other.example/frame",
+            "debug",
+        )
+
+    def test_should_ignore_frame_matches_selector(self):
+        page = MagicMock()
+        frame = MagicMock()
+        frame.url = "http://other.example/frame"
+        with patch(
+            "percy.screenshot._frame_ignore_flags",
+            return_value={"dataPercyIgnore": False, "matchesIgnoreSelector": True},
+        ), patch("percy.screenshot.log") as mock_log:
+            self.assertTrue(_should_ignore_frame(page, frame, [".ad"]))
+        mock_log.assert_called_once_with(
+            "Skipping iframe matching ignoreIframeSelectors: "
+            "http://other.example/frame",
+            "debug",
+        )
+
+    def test_should_not_ignore_frame_when_no_flags(self):
+        page = MagicMock()
+        frame = MagicMock()
+        frame.url = "http://other.example/frame"
+        with patch(
+            "percy.screenshot._frame_ignore_flags",
+            return_value={"dataPercyIgnore": False, "matchesIgnoreSelector": False},
+        ):
+            self.assertFalse(_should_ignore_frame(page, frame, []))
+
+    # --- end-to-end through get_serialized_dom --------------------------
+
+    @staticmethod
+    def _page_with_cross_origin_frame():
+        page = MagicMock()
+        page.url = "http://example.com"
+        page.evaluate.return_value = {"html": "<html></html>"}
+        frame = MagicMock()
+        frame.url = "http://other.example/frame"
+        page.frames = [frame]
+        return page, frame
+
+    def test_get_serialized_dom_skips_data_percy_ignore_iframe(self):
+        page, _frame = self._page_with_cross_origin_frame()
+        with patch(
+            "percy.screenshot._frame_ignore_flags",
+            return_value={"dataPercyIgnore": True, "matchesIgnoreSelector": False},
+        ), patch("percy.screenshot.process_frame") as mock_process:
+            dom_snapshot = get_serialized_dom(
+                page, [], percy_dom_script="percy-dom"
+            )
+        mock_process.assert_not_called()
+        self.assertNotIn("corsIframes", dom_snapshot)
+
+    def test_get_serialized_dom_skips_per_snapshot_selector_match(self):
+        page, frame = self._page_with_cross_origin_frame()
+
+        def flags(_p, f, selectors):
+            return {
+                "dataPercyIgnore": False,
+                "matchesIgnoreSelector": f is frame and selectors == [".ad"],
+            }
+
+        with patch(
+            "percy.screenshot._frame_ignore_flags", side_effect=flags
+        ), patch("percy.screenshot.process_frame") as mock_process:
+            dom_snapshot = get_serialized_dom(
+                page, [], percy_dom_script="percy-dom",
+                ignore_iframe_selectors=[".ad"],
+            )
+        mock_process.assert_not_called()
+        self.assertNotIn("corsIframes", dom_snapshot)
+
+    def test_get_serialized_dom_skips_global_config_selector_match(self):
+        page, frame = self._page_with_cross_origin_frame()
+
+        def flags(_p, f, selectors):
+            return {
+                "dataPercyIgnore": False,
+                "matchesIgnoreSelector": f is frame and selectors == [".global"],
+            }
+
+        with patch(
+            "percy.screenshot._frame_ignore_flags", side_effect=flags
+        ), patch("percy.screenshot.process_frame") as mock_process:
+            dom_snapshot = get_serialized_dom(
+                page, [], percy_dom_script="percy-dom",
+                percy_config={"snapshot": {"ignoreIframeSelectors": [".global"]}},
+            )
+        mock_process.assert_not_called()
+        self.assertNotIn("corsIframes", dom_snapshot)
+
+    def test_get_serialized_dom_captures_non_matching_iframe(self):
+        page, frame = self._page_with_cross_origin_frame()
+        with patch(
+            "percy.screenshot._frame_ignore_flags",
+            return_value={"dataPercyIgnore": False, "matchesIgnoreSelector": False},
+        ), patch("percy.screenshot.process_frame") as mock_process:
+            mock_process.return_value = {"frameUrl": "http://other.example/frame"}
+            dom_snapshot = get_serialized_dom(
+                page, [], percy_dom_script="percy-dom",
+                ignore_iframe_selectors=[".ad"],
+            )
+        mock_process.assert_called_once_with(page, frame, {}, "percy-dom")
+        self.assertEqual(
+            dom_snapshot["corsIframes"],
+            [{"frameUrl": "http://other.example/frame"}],
+        )
+
+    def test_ignore_iframe_selectors_stripped_from_serialize_args(self):
+        page, _frame = self._page_with_cross_origin_frame()
+        with patch(
+            "percy.screenshot._frame_ignore_flags",
+            return_value={"dataPercyIgnore": False, "matchesIgnoreSelector": False},
+        ), patch("percy.screenshot.process_frame", return_value=None):
+            get_serialized_dom(
+                page, [], percy_dom_script="percy-dom",
+                ignore_iframe_selectors=[".ad"],
+                ignoreIframeSelectors=[".x"],
+            )
+        # First page.evaluate is PercyDOM.serialize(...) — must not carry the
+        # SDK-local ignore selectors.
+        serialize_call = page.evaluate.call_args_list[0][0][0]
+        self.assertNotIn("ignore_iframe_selectors", serialize_call)
+        self.assertNotIn("ignoreIframeSelectors", serialize_call)
 
 
 class TestReadinessGate(unittest.TestCase):

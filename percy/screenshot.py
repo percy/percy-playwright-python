@@ -243,6 +243,88 @@ def expose_closed_shadow_roots(page):
                 pass
 
 
+def _resolve_ignore_iframe_selectors(percy_config, kwargs):
+    """Resolve ignoreIframeSelectors, normalized to a list[str].
+
+    Mirrors the JS SDK's resolveIgnoreSelectors: read per-snapshot first
+    (kwargs), then fall back to global config
+    (percy.config.snapshot.ignoreIframeSelectors). Accept snake_case and
+    camelCase per-snapshot keys, matching how this SDK reads other options
+    (e.g. responsive_snapshot_capture / responsiveSnapshotCapture). A bare
+    string is wrapped into a single-element list; non-string entries and
+    non-list/non-string values are dropped to a no-op empty list."""
+    sel = (
+        kwargs.get("ignore_iframe_selectors")
+        or kwargs.get("ignoreIframeSelectors")
+    )
+    if sel is None:
+        config = percy_config or {}
+        snapshot = (config.get("snapshot") or {}) if isinstance(config, dict) else {}
+        sel = snapshot.get("ignoreIframeSelectors") if isinstance(snapshot, dict) else None
+    if not sel:
+        return []
+    if isinstance(sel, str):
+        return [sel]
+    if isinstance(sel, list):
+        return [s for s in sel if isinstance(s, str) and s]
+    return []
+
+
+# JS snippet run in the *parent* frame's DOM: locate this frame's <iframe>
+# element by src/url and report whether it opts out of capture. Invalid
+# selectors are swallowed (try/catch) so a bad entry never aborts the lookup.
+_IGNORE_FLAGS_JS = """
+([fUrl, selectors]) => {
+    const norm = (s) => (s || '').replace(/\\/+$/, '');
+    const target = norm(fUrl);
+    const iframes = Array.from(document.querySelectorAll('iframe'));
+    const el = iframes.find(i => i.src === fUrl) ||
+        iframes.find(i => norm(i.src) === target);
+    if (!el) return { dataPercyIgnore: false, matchesIgnoreSelector: false };
+    let matches = false;
+    if (selectors && selectors.length) {
+        for (let j = 0; j < selectors.length; j++) {
+            try { if (el.matches(selectors[j])) { matches = true; break; } }
+            catch (e) { /* invalid selector swallowed */ }
+        }
+    }
+    return {
+        dataPercyIgnore: el.hasAttribute('data-percy-ignore'),
+        matchesIgnoreSelector: matches
+    };
+}
+"""
+
+
+def _frame_ignore_flags(page, frame, ignore_selectors):
+    """Read the iframe element's opt-out flags from the page's DOM.
+
+    Returns a dict {dataPercyIgnore, matchesIgnoreSelector}. On any error
+    (detached/navigating frame, evaluate failure) returns all-False so the
+    frame is treated as capturable, matching the JS SDK's leave-entry-absent
+    behaviour. The <iframe> element holding this frame lives in the main
+    page's document; the lookup runs there — the same context this SDK's
+    process_frame() already uses for its percyElementId lookup."""
+    try:
+        return page.evaluate(_IGNORE_FLAGS_JS, [frame.url, ignore_selectors])
+    except Exception:  # pragma: no cover - defensive guard for detached frames
+        return {"dataPercyIgnore": False, "matchesIgnoreSelector": False}
+
+
+def _should_ignore_frame(page, frame, ignore_selectors):
+    """True if this cross-origin frame opts out of capture via
+    data-percy-ignore or an ignoreIframeSelectors match. Logs a debug line
+    on skip, mirroring the JS SDK, before any expensive serialization."""
+    flags = _frame_ignore_flags(page, frame, ignore_selectors) or {}
+    if flags.get("dataPercyIgnore"):
+        log(f"Skipping iframe marked with data-percy-ignore: {frame.url}", "debug")
+        return True
+    if flags.get("matchesIgnoreSelector"):
+        log(f"Skipping iframe matching ignoreIframeSelectors: {frame.url}", "debug")
+        return True
+    return False
+
+
 def process_frame(page, frame, options, percy_dom_script):
     """
     Processes a single cross-origin frame to capture its snapshot and resources.
@@ -396,9 +478,12 @@ def get_serialized_dom(page, cookies, percy_dom_script=None, *,
     # Readiness gate before serialize. Graceful on old CLI.
     if not skip_readiness:
         readiness_diagnostics = _wait_for_ready(page, percy_config, kwargs)
-    # Strip `readiness` from forwarded serialize args — it's consumed by
-    # _wait_for_ready upstream, not a PercyDOM.serialize argument.
-    serialize_kwargs = {k: v for k, v in kwargs.items() if k != 'readiness'}
+    # Strip SDK-local options from forwarded serialize args: `readiness` is
+    # consumed by _wait_for_ready upstream, and ignore*IframeSelectors are
+    # consumed by the CORS-iframe filter below — none are PercyDOM.serialize
+    # arguments.
+    _local_keys = {'readiness', 'ignore_iframe_selectors', 'ignoreIframeSelectors'}
+    serialize_kwargs = {k: v for k, v in kwargs.items() if k not in _local_keys}
     dom_snapshot = page.evaluate(f"PercyDOM.serialize({json.dumps(serialize_kwargs)})")
     # Attach readiness diagnostics so the CLI can log timing and pass/fail.
     # `is not None` preserves legitimate falsy returns like {} ("gate ran,
@@ -420,10 +505,21 @@ def get_serialized_dom(page, cookies, percy_dom_script=None, *,
             if frame.url != "about:blank" and urlparse(frame.url).netloc != page_url.netloc
         ]
 
+        # Resolve ignoreIframeSelectors once (per-snapshot kwargs, then global
+        # config). Each candidate frame is then checked for data-percy-ignore
+        # or an ignoreIframeSelectors match in its parent frame's DOM, skipping
+        # before the expensive inject/serialize. Mirrors the JS SDK.
+        ignore_selectors = _resolve_ignore_iframe_selectors(percy_config, kwargs)
+
         if cross_origin_frames and percy_dom_script:
             processed_frames = []
             for frame in cross_origin_frames:
-                result = process_frame(page, frame, kwargs, percy_dom_script)
+                if _should_ignore_frame(page, frame, ignore_selectors):
+                    continue
+                # Forward the cleaned serialize args (SDK-local options like
+                # readiness / ignore*IframeSelectors already stripped) so they
+                # don't leak into the iframe's PercyDOM.serialize call.
+                result = process_frame(page, frame, serialize_kwargs, percy_dom_script)
                 if result:
                     processed_frames.append(result)
 
@@ -658,9 +754,13 @@ def percy_snapshot(page, name, **kwargs):
                 page, cookies, percy_dom_script,
                 percy_config=data.get("config"), **kwargs)
 
-        # Strip `readiness` from POST body — SDK-local config that the CLI
-        # already has via healthcheck.
-        post_kwargs = {k: v for k, v in kwargs.items() if k != "readiness"}
+        # Strip SDK-local options from POST body — `readiness` and the
+        # ignore*IframeSelectors are consumed in-SDK; the CLI already has the
+        # global ignoreIframeSelectors via healthcheck config.
+        post_kwargs = {
+            k: v for k, v in kwargs.items()
+            if k not in ("readiness", "ignore_iframe_selectors", "ignoreIframeSelectors")
+        }
         # Post the DOM to the snapshot endpoint with snapshot options and other info
         response = requests.post(
             f"{PERCY_CLI_API}/percy/snapshot",
