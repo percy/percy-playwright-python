@@ -57,8 +57,13 @@ jobs:
           yarn
           yarn build
           yarn global:link
-          cd ${{ github.workspace }} 
-          yarn remove @percy/cli && yarn link `echo $PERCY_PACKAGES`
-          npx percy --version
+          # Non-JS repo: there is no @percy/cli dependency to remove and no node
+          # project to `yarn link` into. yarn global:link already linked the
+          # built @percy/* packages; just put the freshly built `percy` on PATH
+          # for the test step (and verify it here).
+          GLOBAL_BIN="$(yarn global bin)"
+          echo "$GLOBAL_BIN" >> "$GITHUB_PATH"
+          export PATH="$GLOBAL_BIN:$PATH"
+          percy --version
        
       - run: make test-coverage
