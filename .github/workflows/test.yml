@@ -48,17 +48,24 @@ jobs:
           restore-keys: v1/${{ runner.os }}/node-${{ matrix.node }}/
       - name: Set up @percy/cli from git
         if: ${{ github.event_name == 'workflow_dispatch' }}
+        env:
+          BRANCH: ${{ github.event.inputs.branch }}
         run: |
           cd /tmp
-          git clone --branch ${{ github.event.inputs.branch }} --depth 1 https://github.com/percy/cli
+          git clone --branch "$BRANCH" --depth 1 https://github.com/percy/cli
           cd cli
           PERCY_PACKAGES=`find packages -mindepth 1 -maxdepth 1 -type d | sed -e 's/packages/@percy/g' | tr '\n' ' '`
           git log -1
           yarn
           yarn build
           yarn global:link
-          cd ${{ github.workspace }} 
-          yarn remove @percy/cli && yarn link `echo $PERCY_PACKAGES`
-          npx percy --version
+          # Non-JS repo: there is no @percy/cli dependency to remove and no node
+          # project to `yarn link` into. yarn global:link already linked the
+          # built @percy/* packages; just put the freshly built `percy` on PATH
+          # for the test step (and verify it here).
+          GLOBAL_BIN="$(yarn global bin)"
+          echo "$GLOBAL_BIN" >> "$GITHUB_PATH"
+          export PATH="$GLOBAL_BIN:$PATH"
+          percy --version
        
       - run: make test-coverage
