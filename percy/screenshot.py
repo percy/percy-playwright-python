@@ -96,6 +96,235 @@ def fetch_percy_dom():
     return response.text
 
 
+def _get_origin(url):
+    """Return scheme://host:port for a URL, or '' if it can't be parsed."""
+    if not url:
+        return ""
+    try:
+        parsed = urlparse(url)
+        if not parsed.scheme or not parsed.netloc:
+            return ""
+        return f"{parsed.scheme}://{parsed.netloc}"
+    except Exception:  # pragma: no cover
+        return ""
+
+
+def _same_origin(url, page_origin):
+    """True when `url`'s origin (scheme + host + port) matches the page origin."""
+    if not page_origin:
+        return False
+    return _get_origin(url) == page_origin
+
+
+def _walk_nodes(node, closed_pairs, page_origin=""):
+    """Walk CDP DOM tree to find closed shadow roots.
+
+    Skip any node that has a `contentDocument` (an iframe document). This is a
+    load-bearing invariant shared with the canonical SDKs (percy-playwright JS,
+    percy-puppeteer, percy-playwright-java): every backendNodeId we later pass
+    to DOM.resolveNode must resolve into the TOP frame's main world — the same
+    realm where page.evaluate() creates window.__percyClosedShadowRoots. A
+    child frame document (even same-origin) lives in its own JS realm; resolving
+    a host inside it lands in a realm where the WeakMap is undefined and
+    Runtime.callFunctionOn throws. Same-origin only grants DOM access across
+    frames, NOT a shared JS execution context. Cross-frame closed shadow roots
+    are therefore not yet supported.
+
+    `page_origin` is retained for signature compatibility with existing callers
+    and tests but is unused now that we skip all iframe documents."""
+    # pylint: disable=unused-argument
+    if "contentDocument" in node:
+        return
+    if "shadowRoots" in node:
+        for sr in node["shadowRoots"]:
+            if sr.get("shadowRootType") == "closed":
+                closed_pairs.append({
+                    "hostBackendNodeId": node["backendNodeId"],
+                    "shadowBackendNodeId": sr["backendNodeId"]
+                })
+            _walk_nodes(sr, closed_pairs, page_origin)
+    if "children" in node:
+        for child in node["children"]:
+            _walk_nodes(child, closed_pairs, page_origin)
+
+
+# pylint: disable=too-many-locals
+def expose_closed_shadow_roots(page):
+    """Use CDP to discover closed shadow roots and expose them to PercyDOM.serialize().
+    Closed shadow roots are inaccessible from JS (element.shadowRoot === null),
+    but CDP's DOM domain can pierce them."""
+    cdp_session = None
+    dom_enabled = False
+    try:
+        cdp_session = page.context.new_cdp_session(page)
+
+        cdp_session.send("DOM.enable")
+        dom_enabled = True
+        doc_result = cdp_session.send(
+            "DOM.getDocument", {"depth": -1, "pierce": True}
+        )
+        root = doc_result["root"]
+
+        # The walker skips all iframe documents (see _walk_nodes), so every
+        # resolved host stays in the top frame's main world. page_origin is
+        # passed only for signature compatibility and is no longer consulted.
+        page_origin = _get_origin(page.url)
+
+        closed_pairs = []
+        _walk_nodes(root, closed_pairs, page_origin)
+
+        if not closed_pairs:
+            return
+
+        log(
+            f"Found {len(closed_pairs)} closed shadow root(s),"
+            " exposing via CDP",
+            lvl="debug"
+        )
+
+        weakmap_script = (
+            "() => { window.__percyClosedShadowRoots ="
+            " window.__percyClosedShadowRoots || new WeakMap(); }"
+        )
+        page.evaluate(weakmap_script)
+
+        fn_decl = (
+            "function(shadowRoot) {"
+            " window.__percyClosedShadowRoots"
+            ".set(this, shadowRoot); }"
+        )
+        for pair in closed_pairs:
+            # Wrap each per-host body so one bad backendNodeId (e.g. a node
+            # detached after DOM.getDocument but before DOM.resolveNode, or a
+            # host whose objectId resolves into an unexpected realm) doesn't
+            # abort exposure of the remaining hosts. Matches the per-host guard
+            # in percy-playwright-java.
+            try:
+                host_id = pair["hostBackendNodeId"]
+                host_result = cdp_session.send(
+                    "DOM.resolveNode", {"backendNodeId": host_id}
+                )
+                host_object_id = host_result["object"]["objectId"]
+
+                shadow_id = pair["shadowBackendNodeId"]
+                shadow_result = cdp_session.send(
+                    "DOM.resolveNode", {"backendNodeId": shadow_id}
+                )
+                shadow_object_id = shadow_result["object"]["objectId"]
+
+                cdp_session.send("Runtime.callFunctionOn", {
+                    "functionDeclaration": fn_decl,
+                    "objectId": host_object_id,
+                    "arguments": [{"objectId": shadow_object_id}]
+                })
+            except Exception as per_host_err:
+                log(
+                    f"Skipping one closed shadow host: {per_host_err}",
+                    lvl="debug"
+                )
+    except Exception as err:
+        log(
+            f"Could not expose closed shadow roots via CDP: {err}",
+            lvl="debug"
+        )
+    finally:
+        # Release the DOM domain so subsequent CDP commands don't keep
+        # emitting DOM events for this session. Only sent when DOM.enable
+        # succeeded — a failing enable must not emit a spurious disable.
+        if dom_enabled:
+            try:
+                cdp_session.send("DOM.disable")
+            except Exception:  # pragma: no cover
+                pass
+        if cdp_session:  # pragma: no branch
+            try:
+                cdp_session.detach()
+            except Exception:  # pragma: no cover
+                pass
+
+
+def _resolve_ignore_iframe_selectors(percy_config, kwargs):
+    """Resolve ignoreIframeSelectors, normalized to a list[str].
+
+    Mirrors the JS SDK's resolveIgnoreSelectors: read per-snapshot first
+    (kwargs), then fall back to global config
+    (percy.config.snapshot.ignoreIframeSelectors). Accept snake_case and
+    camelCase per-snapshot keys, matching how this SDK reads other options
+    (e.g. responsive_snapshot_capture / responsiveSnapshotCapture). A bare
+    string is wrapped into a single-element list; non-string entries and
+    non-list/non-string values are dropped to a no-op empty list."""
+    sel = (
+        kwargs.get("ignore_iframe_selectors")
+        or kwargs.get("ignoreIframeSelectors")
+    )
+    if sel is None:
+        config = percy_config or {}
+        snapshot = (config.get("snapshot") or {}) if isinstance(config, dict) else {}
+        sel = snapshot.get("ignoreIframeSelectors") if isinstance(snapshot, dict) else None
+    if not sel:
+        return []
+    if isinstance(sel, str):
+        return [sel]
+    if isinstance(sel, list):
+        return [s for s in sel if isinstance(s, str) and s]
+    return []
+
+
+# JS snippet run in the *parent* frame's DOM: locate this frame's <iframe>
+# element by src/url and report whether it opts out of capture. Invalid
+# selectors are swallowed (try/catch) so a bad entry never aborts the lookup.
+_IGNORE_FLAGS_JS = """
+([fUrl, selectors]) => {
+    const norm = (s) => (s || '').replace(/\\/+$/, '');
+    const target = norm(fUrl);
+    const iframes = Array.from(document.querySelectorAll('iframe'));
+    const el = iframes.find(i => i.src === fUrl) ||
+        iframes.find(i => norm(i.src) === target);
+    if (!el) return { dataPercyIgnore: false, matchesIgnoreSelector: false };
+    let matches = false;
+    if (selectors && selectors.length) {
+        for (let j = 0; j < selectors.length; j++) {
+            try { if (el.matches(selectors[j])) { matches = true; break; } }
+            catch (e) { /* invalid selector swallowed */ }
+        }
+    }
+    return {
+        dataPercyIgnore: el.hasAttribute('data-percy-ignore'),
+        matchesIgnoreSelector: matches
+    };
+}
+"""
+
+
+def _frame_ignore_flags(page, frame, ignore_selectors):
+    """Read the iframe element's opt-out flags from the page's DOM.
+
+    Returns a dict {dataPercyIgnore, matchesIgnoreSelector}. On any error
+    (detached/navigating frame, evaluate failure) returns all-False so the
+    frame is treated as capturable, matching the JS SDK's leave-entry-absent
+    behaviour. The <iframe> element holding this frame lives in the main
+    page's document; the lookup runs there — the same context this SDK's
+    process_frame() already uses for its percyElementId lookup."""
+    try:
+        return page.evaluate(_IGNORE_FLAGS_JS, [frame.url, ignore_selectors])
+    except Exception:  # pragma: no cover - defensive guard for detached frames
+        return {"dataPercyIgnore": False, "matchesIgnoreSelector": False}
+
+
+def _should_ignore_frame(page, frame, ignore_selectors):
+    """True if this cross-origin frame opts out of capture via
+    data-percy-ignore or an ignoreIframeSelectors match. Logs a debug line
+    on skip, mirroring the JS SDK, before any expensive serialization."""
+    flags = _frame_ignore_flags(page, frame, ignore_selectors) or {}
+    if flags.get("dataPercyIgnore"):
+        log(f"Skipping iframe marked with data-percy-ignore: {frame.url}", "debug")
+        return True
+    if flags.get("matchesIgnoreSelector"):
+        log(f"Skipping iframe matching ignoreIframeSelectors: {frame.url}", "debug")
+        return True
+    return False
+
+
 def process_frame(page, frame, options, percy_dom_script):
     """
     Processes a single cross-origin frame to capture its snapshot and resources.
@@ -249,9 +478,12 @@ def get_serialized_dom(page, cookies, percy_dom_script=None, *,
     # Readiness gate before serialize. Graceful on old CLI.
     if not skip_readiness:
         readiness_diagnostics = _wait_for_ready(page, percy_config, kwargs)
-    # Strip `readiness` from forwarded serialize args — it's consumed by
-    # _wait_for_ready upstream, not a PercyDOM.serialize argument.
-    serialize_kwargs = {k: v for k, v in kwargs.items() if k != 'readiness'}
+    # Strip SDK-local options from forwarded serialize args: `readiness` is
+    # consumed by _wait_for_ready upstream, and ignore*IframeSelectors are
+    # consumed by the CORS-iframe filter below — none are PercyDOM.serialize
+    # arguments.
+    _local_keys = {'readiness', 'ignore_iframe_selectors', 'ignoreIframeSelectors'}
+    serialize_kwargs = {k: v for k, v in kwargs.items() if k not in _local_keys}
     dom_snapshot = page.evaluate(f"PercyDOM.serialize({json.dumps(serialize_kwargs)})")
     # Attach readiness diagnostics so the CLI can log timing and pass/fail.
     # `is not None` preserves legitimate falsy returns like {} ("gate ran,
@@ -273,10 +505,21 @@ def get_serialized_dom(page, cookies, percy_dom_script=None, *,
             if frame.url != "about:blank" and urlparse(frame.url).netloc != page_url.netloc
         ]
 
+        # Resolve ignoreIframeSelectors once (per-snapshot kwargs, then global
+        # config). Each candidate frame is then checked for data-percy-ignore
+        # or an ignoreIframeSelectors match in its parent frame's DOM, skipping
+        # before the expensive inject/serialize. Mirrors the JS SDK.
+        ignore_selectors = _resolve_ignore_iframe_selectors(percy_config, kwargs)
+
         if cross_origin_frames and percy_dom_script:
             processed_frames = []
             for frame in cross_origin_frames:
-                result = process_frame(page, frame, kwargs, percy_dom_script)
+                if _should_ignore_frame(page, frame, ignore_selectors):
+                    continue
+                # Forward the cleaned serialize args (SDK-local options like
+                # readiness / ignore*IframeSelectors already stripped) so they
+                # don't leak into the iframe's PercyDOM.serialize call.
+                result = process_frame(page, frame, serialize_kwargs, percy_dom_script)
                 if result:
                     processed_frames.append(result)
 
@@ -439,6 +682,9 @@ def capture_responsive_dom(page, cookies, percy_dom_script=None, config=None, **
         if PERCY_RESPONSIVE_CAPTURE_RELOAD_PAGE:
             page.reload()
             page.evaluate(percy_dom_script)
+            # Re-prime the closed-shadow-root WeakMap — page.reload() creates a
+            # new document and erases window.__percyClosedShadowRoots.
+            expose_closed_shadow_roots(page)
             page.evaluate("PercyDOM.waitForResize()")
             resize_count = 0
 
@@ -492,6 +738,10 @@ def percy_snapshot(page, name, **kwargs):
         # Inject the DOM serialization script
         percy_dom_script = fetch_percy_dom()
         page.evaluate(percy_dom_script)
+
+        # Expose closed shadow roots via CDP before serialization
+        expose_closed_shadow_roots(page)
+
         cookies = page.context.cookies()
 
         # Serialize and capture the DOM
@@ -504,9 +754,13 @@ def percy_snapshot(page, name, **kwargs):
                 page, cookies, percy_dom_script,
                 percy_config=data.get("config"), **kwargs)
 
-        # Strip `readiness` from POST body — SDK-local config that the CLI
-        # already has via healthcheck.
-        post_kwargs = {k: v for k, v in kwargs.items() if k != "readiness"}
+        # Strip SDK-local options from POST body — `readiness` and the
+        # ignore*IframeSelectors are consumed in-SDK; the CLI already has the
+        # global ignoreIframeSelectors via healthcheck config.
+        post_kwargs = {
+            k: v for k, v in kwargs.items()
+            if k not in ("readiness", "ignore_iframe_selectors", "ignoreIframeSelectors")
+        }
         # Post the DOM to the snapshot endpoint with snapshot options and other info
         response = requests.post(
             f"{PERCY_CLI_API}/percy/snapshot",

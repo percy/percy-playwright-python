@@ -33,10 +33,14 @@ class Cache:
 
     @classmethod
     def cleanup_cache(cls):
+        # Iterate a list copy so we can rewrite (or in future, delete) entries
+        # without `RuntimeError: dictionary changed size during iteration`.
         now = time.time()
-        for session_id, session in cls.CACHE.items():
-            timestamp = session[cls.TIMEOUT_KEY]
+        for session_id, session in list(cls.CACHE.items()):
+            timestamp = session.get(cls.TIMEOUT_KEY)
+            if timestamp is None:
+                continue
             if now - timestamp >= cls.CACHE_TIMEOUT:
                 cls.CACHE[session_id] = {
-                    cls.session_details: session[cls.session_details]
+                    cls.session_details: session.get(cls.session_details)
                 }

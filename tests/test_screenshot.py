@@ -24,6 +24,13 @@ from percy.screenshot import (
     change_window_dimension_and_wait,
     get_serialized_dom,
     process_frame,
+    _resolve_ignore_iframe_selectors,
+    _frame_ignore_flags,
+    _should_ignore_frame,
+    expose_closed_shadow_roots,
+    _walk_nodes,
+    _get_origin,
+    _same_origin,
     log,
     _resolve_readiness_config,
     _wait_for_ready,
@@ -297,6 +304,232 @@ class TestPercySnapshot(unittest.TestCase):
             "docs/percy/integrate/functional-and-visual",
             str(context.exception),
         )
+
+
+class TestIgnoreIframeFilters(unittest.TestCase):
+    """Unit tests for the data-percy-ignore + ignoreIframeSelectors filters
+    on the CORS-iframe capture path. Page/frames are fully mocked (no real
+    browser/CDP), mirroring the JS SDK semantics."""
+
+    # --- _resolve_ignore_iframe_selectors -------------------------------
+
+    def test_resolve_selectors_per_snapshot_snake_case(self):
+        self.assertEqual(
+            _resolve_ignore_iframe_selectors(
+                {"snapshot": {"ignoreIframeSelectors": [".global"]}},
+                {"ignore_iframe_selectors": [".local"]},
+            ),
+            [".local"],
+        )
+
+    def test_resolve_selectors_per_snapshot_camel_case(self):
+        self.assertEqual(
+            _resolve_ignore_iframe_selectors(
+                {}, {"ignoreIframeSelectors": [".camel"]}
+            ),
+            [".camel"],
+        )
+
+    def test_resolve_selectors_falls_back_to_global_config(self):
+        self.assertEqual(
+            _resolve_ignore_iframe_selectors(
+                {"snapshot": {"ignoreIframeSelectors": [".global", ".other"]}},
+                {},
+            ),
+            [".global", ".other"],
+        )
+
+    def test_resolve_selectors_string_is_wrapped(self):
+        self.assertEqual(
+            _resolve_ignore_iframe_selectors({}, {"ignoreIframeSelectors": ".one"}),
+            [".one"],
+        )
+
+    def test_resolve_selectors_filters_non_strings(self):
+        self.assertEqual(
+            _resolve_ignore_iframe_selectors(
+                {}, {"ignoreIframeSelectors": [".keep", 5, "", None, ".also"]}
+            ),
+            [".keep", ".also"],
+        )
+
+    def test_resolve_selectors_no_op_when_absent(self):
+        self.assertEqual(_resolve_ignore_iframe_selectors({}, {}), [])
+        self.assertEqual(_resolve_ignore_iframe_selectors(None, {}), [])
+
+    def test_resolve_selectors_no_op_for_unexpected_type(self):
+        self.assertEqual(
+            _resolve_ignore_iframe_selectors({}, {"ignoreIframeSelectors": {"a": 1}}),
+            [],
+        )
+
+    def test_resolve_selectors_handles_none_snapshot_section(self):
+        self.assertEqual(
+            _resolve_ignore_iframe_selectors({"snapshot": None}, {}), []
+        )
+
+    # --- _frame_ignore_flags --------------------------------------------
+
+    def test_frame_ignore_flags_passes_url_and_selectors(self):
+        page = MagicMock()
+        page.evaluate.return_value = {
+            "dataPercyIgnore": True, "matchesIgnoreSelector": False
+        }
+        frame = MagicMock()
+        frame.url = "http://other.example/frame"
+        flags = _frame_ignore_flags(page, frame, [".ad"])
+        self.assertTrue(flags["dataPercyIgnore"])
+        # selectors + url forwarded to the in-page evaluate
+        args = page.evaluate.call_args[0]
+        self.assertEqual(args[1], ["http://other.example/frame", [".ad"]])
+
+    def test_frame_ignore_flags_returns_falsey_on_error(self):
+        page = MagicMock()
+        page.evaluate.side_effect = Exception("detached")
+        frame = MagicMock()
+        frame.url = "http://other.example/frame"
+        self.assertEqual(
+            _frame_ignore_flags(page, frame, []),
+            {"dataPercyIgnore": False, "matchesIgnoreSelector": False},
+        )
+
+    # --- _should_ignore_frame -------------------------------------------
+
+    def test_should_ignore_frame_data_percy_ignore(self):
+        page = MagicMock()
+        frame = MagicMock()
+        frame.url = "http://other.example/frame"
+        with patch(
+            "percy.screenshot._frame_ignore_flags",
+            return_value={"dataPercyIgnore": True, "matchesIgnoreSelector": False},
+        ), patch("percy.screenshot.log") as mock_log:
+            self.assertTrue(_should_ignore_frame(page, frame, []))
+        mock_log.assert_called_once_with(
+            "Skipping iframe marked with data-percy-ignore: "
+            "http://other.example/frame",
+            "debug",
+        )
+
+    def test_should_ignore_frame_matches_selector(self):
+        page = MagicMock()
+        frame = MagicMock()
+        frame.url = "http://other.example/frame"
+        with patch(
+            "percy.screenshot._frame_ignore_flags",
+            return_value={"dataPercyIgnore": False, "matchesIgnoreSelector": True},
+        ), patch("percy.screenshot.log") as mock_log:
+            self.assertTrue(_should_ignore_frame(page, frame, [".ad"]))
+        mock_log.assert_called_once_with(
+            "Skipping iframe matching ignoreIframeSelectors: "
+            "http://other.example/frame",
+            "debug",
+        )
+
+    def test_should_not_ignore_frame_when_no_flags(self):
+        page = MagicMock()
+        frame = MagicMock()
+        frame.url = "http://other.example/frame"
+        with patch(
+            "percy.screenshot._frame_ignore_flags",
+            return_value={"dataPercyIgnore": False, "matchesIgnoreSelector": False},
+        ):
+            self.assertFalse(_should_ignore_frame(page, frame, []))
+
+    # --- end-to-end through get_serialized_dom --------------------------
+
+    @staticmethod
+    def _page_with_cross_origin_frame():
+        page = MagicMock()
+        page.url = "http://example.com"
+        page.evaluate.return_value = {"html": "<html></html>"}
+        frame = MagicMock()
+        frame.url = "http://other.example/frame"
+        page.frames = [frame]
+        return page, frame
+
+    def test_get_serialized_dom_skips_data_percy_ignore_iframe(self):
+        page, _frame = self._page_with_cross_origin_frame()
+        with patch(
+            "percy.screenshot._frame_ignore_flags",
+            return_value={"dataPercyIgnore": True, "matchesIgnoreSelector": False},
+        ), patch("percy.screenshot.process_frame") as mock_process:
+            dom_snapshot = get_serialized_dom(
+                page, [], percy_dom_script="percy-dom"
+            )
+        mock_process.assert_not_called()
+        self.assertNotIn("corsIframes", dom_snapshot)
+
+    def test_get_serialized_dom_skips_per_snapshot_selector_match(self):
+        page, frame = self._page_with_cross_origin_frame()
+
+        def flags(_p, f, selectors):
+            return {
+                "dataPercyIgnore": False,
+                "matchesIgnoreSelector": f is frame and selectors == [".ad"],
+            }
+
+        with patch(
+            "percy.screenshot._frame_ignore_flags", side_effect=flags
+        ), patch("percy.screenshot.process_frame") as mock_process:
+            dom_snapshot = get_serialized_dom(
+                page, [], percy_dom_script="percy-dom",
+                ignore_iframe_selectors=[".ad"],
+            )
+        mock_process.assert_not_called()
+        self.assertNotIn("corsIframes", dom_snapshot)
+
+    def test_get_serialized_dom_skips_global_config_selector_match(self):
+        page, frame = self._page_with_cross_origin_frame()
+
+        def flags(_p, f, selectors):
+            return {
+                "dataPercyIgnore": False,
+                "matchesIgnoreSelector": f is frame and selectors == [".global"],
+            }
+
+        with patch(
+            "percy.screenshot._frame_ignore_flags", side_effect=flags
+        ), patch("percy.screenshot.process_frame") as mock_process:
+            dom_snapshot = get_serialized_dom(
+                page, [], percy_dom_script="percy-dom",
+                percy_config={"snapshot": {"ignoreIframeSelectors": [".global"]}},
+            )
+        mock_process.assert_not_called()
+        self.assertNotIn("corsIframes", dom_snapshot)
+
+    def test_get_serialized_dom_captures_non_matching_iframe(self):
+        page, frame = self._page_with_cross_origin_frame()
+        with patch(
+            "percy.screenshot._frame_ignore_flags",
+            return_value={"dataPercyIgnore": False, "matchesIgnoreSelector": False},
+        ), patch("percy.screenshot.process_frame") as mock_process:
+            mock_process.return_value = {"frameUrl": "http://other.example/frame"}
+            dom_snapshot = get_serialized_dom(
+                page, [], percy_dom_script="percy-dom",
+                ignore_iframe_selectors=[".ad"],
+            )
+        mock_process.assert_called_once_with(page, frame, {}, "percy-dom")
+        self.assertEqual(
+            dom_snapshot["corsIframes"],
+            [{"frameUrl": "http://other.example/frame"}],
+        )
+
+    def test_ignore_iframe_selectors_stripped_from_serialize_args(self):
+        page, _frame = self._page_with_cross_origin_frame()
+        with patch(
+            "percy.screenshot._frame_ignore_flags",
+            return_value={"dataPercyIgnore": False, "matchesIgnoreSelector": False},
+        ), patch("percy.screenshot.process_frame", return_value=None):
+            get_serialized_dom(
+                page, [], percy_dom_script="percy-dom",
+                ignore_iframe_selectors=[".ad"],
+                ignoreIframeSelectors=[".x"],
+            )
+        # First page.evaluate is PercyDOM.serialize(...) — must not carry the
+        # SDK-local ignore selectors.
+        serialize_call = page.evaluate.call_args_list[0][0][0]
+        self.assertNotIn("ignore_iframe_selectors", serialize_call)
+        self.assertNotIn("ignoreIframeSelectors", serialize_call)
 
 
 class TestReadinessGate(unittest.TestCase):
@@ -1219,6 +1452,8 @@ class TestResponsiveHelpers(unittest.TestCase):
         ) as mock_resize, patch(
             "percy.screenshot.fetch_percy_dom"
         ) as mock_fetch, patch(
+            "percy.screenshot.expose_closed_shadow_roots"
+        ) as mock_expose, patch(
             "percy.screenshot.sleep"
         ) as mock_sleep:
             mock_widths.return_value = [
@@ -1237,6 +1472,9 @@ class TestResponsiveHelpers(unittest.TestCase):
         page.evaluate.assert_any_call("dom-script")
         self.assertEqual(page.evaluate.call_count, 5)
         self.assertEqual(page.reload.call_count, 2)
+        # WeakMap must be re-primed after each reload (one per width here)
+        self.assertEqual(mock_expose.call_count, 2)
+        mock_expose.assert_has_calls([call(page), call(page)])
         mock_sleep.assert_any_call(1)
         self.assertEqual(mock_sleep.call_count, 2)
         mock_resize.assert_has_calls(
@@ -1416,6 +1654,304 @@ class TestResponsiveHelpers(unittest.TestCase):
         }
 
         self.assertEqual(result, expected_result)
+
+
+class TestClosedShadowDOM(unittest.TestCase):
+    """Tests for expose_closed_shadow_roots and _walk_nodes."""
+
+    def test_walk_nodes_finds_closed_shadow_roots(self):
+        # uses top-level _walk_nodes import
+        node = {
+            "backendNodeId": 1,
+            "shadowRoots": [
+                {"backendNodeId": 2, "shadowRootType": "closed", "children": []},
+                {"backendNodeId": 3, "shadowRootType": "open", "children": []}
+            ],
+            "children": []
+        }
+        pairs = []
+        _walk_nodes(node, pairs)
+        self.assertEqual(len(pairs), 1)
+        self.assertEqual(pairs[0]["hostBackendNodeId"], 1)
+        self.assertEqual(pairs[0]["shadowBackendNodeId"], 2)
+
+    def test_walk_nodes_skips_content_document_missing_url(self):
+        # contentDocument with no documentURL -> defensive skip
+        # uses top-level _walk_nodes import
+        node = {
+            "backendNodeId": 1,
+            "contentDocument": {"backendNodeId": 2, "children": [
+                {"backendNodeId": 3, "shadowRoots": [
+                    {"backendNodeId": 4, "shadowRootType": "closed", "children": []}
+                ], "children": []}
+            ]},
+            "children": []
+        }
+        pairs = []
+        _walk_nodes(node, pairs, "https://example.com")
+        self.assertEqual(len(pairs), 0)
+
+    def test_walk_nodes_skips_same_origin_iframe(self):
+        # Any node with a contentDocument is skipped, even same-origin. A child
+        # frame document lives in its own JS realm; resolving a host inside it
+        # would land in a realm without window.__percyClosedShadowRoots and
+        # throw. Matches percy-playwright JS / puppeteer / playwright-java,
+        # which all `return` on contentDocument.
+        # uses top-level _walk_nodes import
+        node = {
+            "backendNodeId": 1,
+            "contentDocument": {
+                "backendNodeId": 2,
+                "documentURL": "https://example.com/inner",
+                "children": [
+                    {"backendNodeId": 3, "shadowRoots": [
+                        {"backendNodeId": 4, "shadowRootType": "closed",
+                         "children": []}
+                    ], "children": []}
+                ]
+            },
+            "children": []
+        }
+        pairs = []
+        _walk_nodes(node, pairs, "https://example.com")
+        self.assertEqual(len(pairs), 0)
+
+    def test_walk_nodes_continues_siblings_after_iframe(self):
+        # An iframe node is skipped, but closed shadow roots elsewhere in the
+        # top-frame tree are still captured.
+        # uses top-level _walk_nodes import
+        root = {
+            "backendNodeId": 1,
+            "children": [
+                {
+                    "backendNodeId": 2,
+                    "contentDocument": {
+                        "backendNodeId": 3,
+                        "documentURL": "https://example.com/inner",
+                        "children": [
+                            {"backendNodeId": 4, "shadowRoots": [
+                                {"backendNodeId": 5, "shadowRootType": "closed",
+                                 "children": []}
+                            ], "children": []}
+                        ]
+                    },
+                    "children": []
+                },
+                {"backendNodeId": 6, "shadowRoots": [
+                    {"backendNodeId": 7, "shadowRootType": "closed",
+                     "children": []}
+                ], "children": []}
+            ]
+        }
+        pairs = []
+        _walk_nodes(root, pairs, "https://example.com")
+        self.assertEqual(len(pairs), 1)
+        self.assertEqual(pairs[0]["hostBackendNodeId"], 6)
+        self.assertEqual(pairs[0]["shadowBackendNodeId"], 7)
+
+    def test_walk_nodes_skips_cross_origin_iframe(self):
+        # Cross-origin contentDocument -> skip the nested document entirely
+        # uses top-level _walk_nodes import
+        node = {
+            "backendNodeId": 1,
+            "contentDocument": {
+                "backendNodeId": 2,
+                "documentURL": "https://other.com/inner",
+                "children": [
+                    {"backendNodeId": 3, "shadowRoots": [
+                        {"backendNodeId": 4, "shadowRootType": "closed",
+                         "children": []}
+                    ], "children": []}
+                ]
+            },
+            "children": []
+        }
+        pairs = []
+        _walk_nodes(node, pairs, "https://example.com")
+        self.assertEqual(len(pairs), 0)
+
+    def test_walk_nodes_skips_iframe_when_page_origin_unknown(self):
+        # documentURL present but no page origin to compare against -> skip
+        # uses top-level _walk_nodes import
+        node = {
+            "backendNodeId": 1,
+            "contentDocument": {
+                "backendNodeId": 2,
+                "documentURL": "https://example.com/inner",
+                "children": [
+                    {"backendNodeId": 3, "shadowRoots": [
+                        {"backendNodeId": 4, "shadowRootType": "closed",
+                         "children": []}
+                    ], "children": []}
+                ]
+            },
+            "children": []
+        }
+        pairs = []
+        _walk_nodes(node, pairs, "")
+        self.assertEqual(len(pairs), 0)
+
+    def test_get_origin_and_same_origin(self):
+        self.assertEqual(
+            _get_origin("https://example.com:8080/a/b"),
+            "https://example.com:8080"
+        )
+        self.assertEqual(_get_origin(""), "")
+        self.assertEqual(_get_origin("not a url"), "")
+        self.assertTrue(
+            _same_origin("https://example.com/x", "https://example.com")
+        )
+        self.assertFalse(
+            _same_origin("https://other.com/x", "https://example.com")
+        )
+        self.assertFalse(_same_origin("https://example.com/x", ""))
+
+    def test_expose_non_chromium_browser(self):
+        # uses top-level expose_closed_shadow_roots import
+        page = MagicMock()
+        page.context.new_cdp_session.side_effect = Exception("Not Chromium")
+        # Should not throw
+        expose_closed_shadow_roots(page)
+
+    def test_expose_no_closed_roots(self):
+        # uses top-level expose_closed_shadow_roots import
+        page = MagicMock()
+        page.url = "https://example.com"
+        cdp = MagicMock()
+        page.context.new_cdp_session.return_value = cdp
+        cdp.send.side_effect = lambda method, params=None: (
+            {"root": {"backendNodeId": 1, "children": []}} if method == "DOM.getDocument" else None
+        )
+        expose_closed_shadow_roots(page)
+        cdp.detach.assert_called_once()
+        page.evaluate.assert_not_called()
+        # DOM.disable must be paired with the successful DOM.enable
+        sent = [c.args[0] for c in cdp.send.call_args_list]
+        self.assertIn("DOM.enable", sent)
+        self.assertIn("DOM.disable", sent)
+
+    def test_expose_closed_roots_found(self):
+        # uses top-level expose_closed_shadow_roots import
+        page = MagicMock()
+        page.url = "https://example.com"
+        cdp = MagicMock()
+        page.context.new_cdp_session.return_value = cdp
+
+        def cdp_send(method, params=None):
+            if method == "DOM.getDocument":
+                return {"root": {"backendNodeId": 1, "children": [
+                    {"backendNodeId": 10, "shadowRoots": [
+                        {"backendNodeId": 20, "shadowRootType": "closed", "children": []}
+                    ], "children": []}
+                ]}}
+            if method == "DOM.resolveNode":
+                return {"object": {"objectId": f"obj-{params['backendNodeId']}"}}
+            return None
+
+        cdp.send.side_effect = cdp_send
+        expose_closed_shadow_roots(page)
+        page.evaluate.assert_called_once()
+        cdp.detach.assert_called_once()
+
+    def test_expose_one_failing_host_does_not_abort_others(self):
+        # Two closed shadow hosts; resolving the FIRST host raises. The second
+        # host must still be exposed (per-host try/except). uses top-level
+        # expose_closed_shadow_roots import
+        page = MagicMock()
+        page.url = "https://example.com"
+        cdp = MagicMock()
+        page.context.new_cdp_session.return_value = cdp
+
+        good_calls = []
+
+        def cdp_send(method, params=None):
+            if method == "DOM.getDocument":
+                return {"root": {"backendNodeId": 1, "children": [
+                    {"backendNodeId": 10, "shadowRoots": [
+                        {"backendNodeId": 20, "shadowRootType": "closed",
+                         "children": []}
+                    ], "children": []},
+                    {"backendNodeId": 30, "shadowRoots": [
+                        {"backendNodeId": 40, "shadowRootType": "closed",
+                         "children": []}
+                    ], "children": []}
+                ]}}
+            if method == "DOM.resolveNode":
+                bid = params["backendNodeId"]
+                # First host (10) blows up; everything else resolves.
+                if bid == 10:
+                    raise Exception("detached node")
+                return {"object": {"objectId": f"obj-{bid}"}}
+            if method == "Runtime.callFunctionOn":
+                good_calls.append(params["objectId"])
+            return None
+
+        cdp.send.side_effect = cdp_send
+        expose_closed_shadow_roots(page)
+        # The second host (30) was still exposed despite the first failing.
+        self.assertEqual(good_calls, ["obj-30"])
+        cdp.detach.assert_called_once()
+
+    def test_expose_sends_dom_disable_after_mid_walk_failure(self):
+        # DOM.enable succeeded but a later send raised -> DOM.disable still sent
+        # uses top-level expose_closed_shadow_roots import
+        page = MagicMock()
+        page.url = "https://example.com"
+        cdp = MagicMock()
+        page.context.new_cdp_session.return_value = cdp
+
+        # DOM.enable returns None (success); DOM.getDocument raises mid-walk
+        def cdp_send(method, _params=None):
+            if method == "DOM.getDocument":
+                raise Exception("walk blew up")
+
+        cdp.send.side_effect = cdp_send
+        expose_closed_shadow_roots(page)
+        sent = [c.args[0] for c in cdp.send.call_args_list]
+        self.assertIn("DOM.disable", sent)
+        cdp.detach.assert_called_once()
+
+    def test_expose_does_not_send_dom_disable_when_enable_failed(self):
+        # DOM.enable itself raised -> no spurious DOM.disable
+        # uses top-level expose_closed_shadow_roots import
+        page = MagicMock()
+        page.url = "https://example.com"
+        cdp = MagicMock()
+        page.context.new_cdp_session.return_value = cdp
+
+        def cdp_send(method, _params=None):
+            if method == "DOM.enable":
+                raise Exception("enable failed")
+
+        cdp.send.side_effect = cdp_send
+        expose_closed_shadow_roots(page)
+        sent = [c.args[0] for c in cdp.send.call_args_list]
+        self.assertNotIn("DOM.disable", sent)
+        cdp.detach.assert_called_once()
+
+    def test_expose_cdp_error_non_fatal(self):
+        # uses top-level expose_closed_shadow_roots import
+        page = MagicMock()
+        cdp = MagicMock()
+        page.context.new_cdp_session.return_value = cdp
+        cdp.send.side_effect = Exception("CDP failed")
+        # Should not throw
+        expose_closed_shadow_roots(page)
+        cdp.detach.assert_called_once()
+
+    def test_expose_detach_error_suppressed(self):
+        # covers lines 174-175: except Exception: pass in finally
+        # uses top-level expose_closed_shadow_roots import
+        page = MagicMock()
+        cdp = MagicMock()
+        page.context.new_cdp_session.return_value = cdp
+        cdp.send.side_effect = lambda method, params=None: (
+            {"root": {"backendNodeId": 1, "children": []}}
+            if method == "DOM.getDocument" else None
+        )
+        cdp.detach.side_effect = Exception("Detach failed")
+        # Should not throw even when detach fails
+        expose_closed_shadow_roots(page)
 
 
 if __name__ == "__main__":
