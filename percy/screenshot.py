@@ -382,6 +382,21 @@ def process_frame(page, frame, options, percy_dom_script):
         return None
 
 
+def _deep_merge(base, override):
+    """Recursively merge `override` onto `base`. Nested dicts are merged key by
+    key; per-call (override) values win at the leaves; lists and scalars
+    replace rather than concatenate/merge."""
+    merged = dict(base)
+    for key, value in override.items():
+        existing = merged.get(key)
+        merged[key] = (
+            _deep_merge(existing, value)
+            if isinstance(existing, dict) and isinstance(value, dict)
+            else value
+        )
+    return merged
+
+
 def _resolve_readiness_config(percy_config, kwargs):
     """Shallow-merge global (percy_config.snapshot.readiness) and per-snapshot
     (kwargs['readiness']) readiness config. Per-snapshot keys win; unspecified
@@ -744,15 +759,19 @@ def percy_snapshot(page, name, **kwargs):
 
         cookies = page.context.cookies()
 
+        # Merge .percy.yml config options with snapshot options (snapshot options take priority)
+        config_options = data["config"].get("snapshot") or {}
+        merged_kwargs = _deep_merge(config_options, kwargs)
+
         # Serialize and capture the DOM
-        if is_responsive_snapshot_capture(data["config"], **kwargs):
+        if is_responsive_snapshot_capture(data["config"], **merged_kwargs):
             dom_snapshot = capture_responsive_dom(
-                page, cookies, percy_dom_script, config=data["config"], **kwargs
+                page, cookies, percy_dom_script, config=data["config"], **merged_kwargs
             )
         else:
             dom_snapshot = get_serialized_dom(
                 page, cookies, percy_dom_script,
-                percy_config=data.get("config"), **kwargs)
+                percy_config=data.get("config"), **merged_kwargs)
 
         # Strip SDK-local options from POST body — `readiness` and the
         # ignore*IframeSelectors are consumed in-SDK; the CLI already has the
