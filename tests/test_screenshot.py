@@ -1,4 +1,5 @@
 # pylint: disable=[abstract-class-instantiated, arguments-differ, protected-access, too-many-lines]
+import os
 import json
 import unittest
 import platform
@@ -35,6 +36,7 @@ from percy.screenshot import (
     _resolve_readiness_config,
     _wait_for_ready,
     _deep_merge,
+    _get_cli_api_address,
 )
 import percy.screenshot as local
 
@@ -93,14 +95,14 @@ def mock_healthcheck(
     health_body = json.dumps(health_body)
     httpretty.register_uri(
         httpretty.GET,
-        "http://localhost:5338/percy/healthcheck",
+        f"{local.PERCY_CLI_API}/percy/healthcheck",
         body=health_body,
         adding_headers=health_headers,
         status=health_status,
     )
     httpretty.register_uri(
         httpretty.GET,
-        "http://localhost:5338/percy/dom.js",
+        f"{local.PERCY_CLI_API}/percy/dom.js",
         body=(
             "window.PercyDOM = { serialize: () => { return { html: "
             "document.documentElement.outerHTML } }, waitForResize: () => { "
@@ -114,7 +116,7 @@ def mock_healthcheck(
 def mock_logger():
     httpretty.register_uri(
         httpretty.POST,
-        "http://localhost:5338/percy/log",
+        f"{local.PERCY_CLI_API}/percy/log",
         body=json.dumps({"success": True}),
         status=200,
     )
@@ -123,7 +125,7 @@ def mock_logger():
 def mock_snapshot(fail=False, data=False):
     httpretty.register_uri(
         httpretty.POST,
-        "http://localhost:5338/percy/snapshot",
+        f"{local.PERCY_CLI_API}/percy/snapshot",
         body=json.dumps(
             {
                 "success": "false" if fail else "true",
@@ -1109,7 +1111,7 @@ class TestPercyFunctions(unittest.TestCase):
         # Assertions
         self.assertEqual(result, "screenshot_data")
         mock_post.assert_called_once_with(
-            "http://localhost:5338/percy/automateScreenshot",
+            f"{local.PERCY_CLI_API}/percy/automateScreenshot",
             json={
                 "client_info": f"percy-playwright-python/{SDK_VERSION}",
                 "environment_info": [
@@ -1501,7 +1503,7 @@ class TestResponsiveHelpers(unittest.TestCase):
             ],
         )
         mock_get.assert_called_once_with(
-            "http://localhost:5338/percy/widths-config?widths=375,1280",
+            f"{local.PERCY_CLI_API}/percy/widths-config?widths=375,1280",
             timeout=30,
         )
 
@@ -1536,7 +1538,7 @@ class TestResponsiveHelpers(unittest.TestCase):
             ],
         )
         mock_get.assert_called_once_with(
-            "http://localhost:5338/percy/widths-config",
+            f"{local.PERCY_CLI_API}/percy/widths-config",
             timeout=30,
         )
 
@@ -1558,7 +1560,7 @@ class TestResponsiveHelpers(unittest.TestCase):
             ],
         )
         mock_get.assert_called_once_with(
-            "http://localhost:5338/percy/widths-config",
+            f"{local.PERCY_CLI_API}/percy/widths-config",
             timeout=30,
         )
 
@@ -2079,6 +2081,28 @@ class TestClosedShadowDOM(unittest.TestCase):
         cdp.detach.side_effect = Exception("Detach failed")
         # Should not throw even when detach fails
         expose_closed_shadow_roots(page)
+
+
+class TestCliApiAddress(unittest.TestCase):
+    def test_prefers_percy_cli_api(self):
+        with patch.dict("os.environ", {
+            "PERCY_CLI_API": "http://localhost:1111",
+            "PERCY_SERVER_ADDRESS": "http://localhost:2222",
+        }):
+            self.assertEqual(_get_cli_api_address(), "http://localhost:1111")
+
+    def test_falls_back_to_percy_server_address(self):
+        with patch.dict("os.environ", {"PERCY_SERVER_ADDRESS": "http://localhost:2222"}):
+            os.environ.pop("PERCY_CLI_API", None)
+            self.assertEqual(_get_cli_api_address(), "http://localhost:2222")
+
+    def test_ignores_empty_values(self):
+        with patch.dict("os.environ", {"PERCY_CLI_API": "", "PERCY_SERVER_ADDRESS": ""}):
+            self.assertEqual(_get_cli_api_address(), "http://localhost:5338")
+
+    def test_defaults_to_5338(self):
+        with patch.dict("os.environ", {}, clear=True):
+            self.assertEqual(_get_cli_api_address(), "http://localhost:5338")
 
 
 if __name__ == "__main__":
