@@ -19,8 +19,15 @@ def _get_bool_env(key):
     """Get boolean value from environment variable."""
     return os.environ.get(key, "").lower() == "true"
 
-# Maybe get the CLI API address from the environment
-PERCY_CLI_API = os.environ.get("PERCY_CLI_API") or "http://localhost:5338"
+def _get_cli_api_address():
+    # `percy exec --port N` exports PERCY_SERVER_ADDRESS, not PERCY_CLI_API
+    return (
+        os.environ.get("PERCY_CLI_API")
+        or os.environ.get("PERCY_SERVER_ADDRESS")
+        or "http://localhost:5338"
+    )
+
+PERCY_CLI_API = _get_cli_api_address()
 PERCY_DEBUG = os.environ.get("PERCY_LOGLEVEL") == "debug"
 RESPONSIVE_CAPTURE_SLEEP_TIME = os.environ.get("RESPONSIVE_CAPTURE_SLEEP_TIME")
 PERCY_RESPONSIVE_CAPTURE_MIN_HEIGHT = _get_bool_env("PERCY_RESPONSIVE_CAPTURE_MIN_HEIGHT")
